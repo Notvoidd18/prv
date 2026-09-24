@@ -41,12 +41,20 @@ export const StudentLibrary: React.FC<StudentLibraryProps> = ({
   onOpenSettings,
 }) => {
   const [selectedCategory, setSelectedCategory] = useState<string>('All');
-  const [selectedType, setSelectedType] = useState<'All' | 'video' | 'photo' | 'pdf' | 'doc'>('All');
+  const [selectedType, setSelectedType] = useState<'All' | 'video' | 'photo' | 'pdf' | 'doc' | 'homework'>('All');
   const [searchQuery, setSearchQuery] = useState('');
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
 
-  // Small Gemini Assistant Modal for specific lesson
+  const [homeworkList, setHomeworkList] = useState<any[]>([]);
+
+  // Check if Gemini API key is configured (only show AI features if API key is present)
+  const hasApiKey = Boolean(
+    currentUser?.geminiApiKey ||
+    (currentUser?.email ? localStorage.getItem(`10prv_gemini_key_${currentUser.email}`) : '') ||
+    localStorage.getItem('10prv_global_gemini_key')
+  );
+
   const [aiModalLesson, setAiModalLesson] = useState<LessonRecord | null>(null);
   const [aiPrompt, setAiPrompt] = useState('');
   const [aiLoading, setAiLoading] = useState(false);
@@ -72,6 +80,15 @@ export const StudentLibrary: React.FC<StudentLibraryProps> = ({
       .then((data) => {
         if (data.subjects && data.subjects.length > 0) {
           setSubjectsList(data.subjects);
+        }
+      })
+      .catch(() => {});
+
+    fetch('/api/homework')
+      .then((res) => res.json())
+      .then((data) => {
+        if (data.homework) {
+          setHomeworkList(data.homework);
         }
       })
       .catch(() => {});
@@ -250,7 +267,7 @@ export const StudentLibrary: React.FC<StudentLibraryProps> = ({
             <span className="text-[11px] font-bold text-sky-800 dark:text-sky-300 uppercase tracking-wider mr-1 shrink-0">
               Format:
             </span>
-            {(['All', 'video', 'photo', 'pdf', 'doc'] as const).map((t) => (
+            {(['All', 'video', 'photo', 'pdf', 'doc', 'homework'] as const).map((t) => (
               <button
                 key={t}
                 onClick={() => setSelectedType(t)}
@@ -260,7 +277,7 @@ export const StudentLibrary: React.FC<StudentLibraryProps> = ({
                     : 'bg-sky-500/5 hover:bg-sky-500/15 text-slate-600 dark:text-slate-400 border border-sky-400/10'
                 }`}
               >
-                {t === 'All' ? 'All Formats' : t.toUpperCase()}
+                {t === 'All' ? 'All Formats' : t === 'homework' ? 'Homework' : t.toUpperCase()}
               </button>
             ))}
           </div>
@@ -339,22 +356,23 @@ export const StudentLibrary: React.FC<StudentLibraryProps> = ({
                     </div>
                   )}
 
-                  {/* Top Badges: Format Badge & SMALL GEMINI ICON BUTTON */}
+                  {/* Top Badges: Format Badge & Optional Gemini AI Button */}
                   <div className="absolute top-2.5 left-2.5 right-2.5 flex items-center justify-between pointer-events-none">
                     <span className="px-2 py-0.5 rounded-md bg-black/60 backdrop-blur-md text-white text-[10px] font-mono font-bold uppercase tracking-wider border border-white/10">
                       {item.type ? item.type.toUpperCase() : 'VIDEO'}
                     </span>
 
-                    {/* SMALL GEMINI ICON: Instant Click to Study / Search on this note/video */}
-                    <button
-                      type="button"
-                      onClick={(e) => handleOpenAiModal(e, item)}
-                      className="pointer-events-auto p-1.5 rounded-xl bg-slate-950/80 hover:bg-sky-600 text-sky-300 hover:text-white border border-sky-400/30 shadow-md backdrop-blur-md transition-all flex items-center gap-1 text-[10px] font-bold cursor-pointer group/gemini"
-                      title="Study and ask questions with Gemini"
-                    >
-                      <Sparkles className="w-3.5 h-3.5 text-sky-400 group-hover/gemini:text-white transition-colors" />
-                      <span className="font-sans font-semibold">Gemini</span>
-                    </button>
+                    {hasApiKey && (
+                      <button
+                        type="button"
+                        onClick={(e) => handleOpenAiModal(e, item)}
+                        className="pointer-events-auto p-1.5 rounded-xl bg-slate-950/80 hover:bg-sky-600 text-sky-300 hover:text-white border border-sky-400/30 shadow-md backdrop-blur-md transition-all flex items-center gap-1 text-[10px] font-bold cursor-pointer group/gemini"
+                        title="Study and ask questions with Gemini"
+                      >
+                        <Sparkles className="w-3.5 h-3.5 text-sky-400 group-hover/gemini:text-white transition-colors" />
+                        <span className="font-sans font-semibold">Gemini</span>
+                      </button>
+                    )}
                   </div>
 
                   {/* Inline Working Delete Button */}
@@ -419,21 +437,84 @@ export const StudentLibrary: React.FC<StudentLibraryProps> = ({
                     <span className="truncate max-w-[120px]">By {item.uploader}</span>
                     <div className="flex items-center gap-2 shrink-0">
                       <span>{formatSize(item.size)}</span>
-                      {/* Small Gemini icon in footer for easy touch targets */}
-                      <button
-                        type="button"
-                        onClick={(e) => handleOpenAiModal(e, item)}
-                        className="p-1 rounded-md text-sky-600 dark:text-sky-400 hover:bg-sky-500/15 cursor-pointer"
-                        title="Ask Gemini AI"
-                      >
-                        <Sparkles className="w-3 h-3" />
-                      </button>
+                      {hasApiKey && (
+                        <button
+                          type="button"
+                          onClick={(e) => handleOpenAiModal(e, item)}
+                          className="p-1 rounded-md text-sky-600 dark:text-sky-400 hover:bg-sky-500/15 cursor-pointer"
+                          title="Ask Gemini AI"
+                        >
+                          <Sparkles className="w-3 h-3" />
+                        </button>
+                      )}
                     </div>
                   </div>
                 </div>
               </div>
             );
           })}
+        </div>
+      )}
+
+      {/* STUDENT HOMEWORK SECTION ON MAIN PAGE */}
+      {(selectedType === 'All' || selectedType === 'homework') && homeworkList.length > 0 && (
+        <div className="space-y-4 pt-8 border-t border-sky-400/20 mt-8">
+          <div className="flex items-center justify-between">
+            <div>
+              <h3 className="text-base font-bold text-slate-900 dark:text-white flex items-center gap-2">
+                <FileText className="w-5 h-5 text-sky-500" />
+                <span>Student Homework &amp; Notes Submissions</span>
+              </h3>
+              <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
+                Explore homework solutions and study notes submitted by students.
+              </p>
+            </div>
+            <span className="text-xs font-bold px-3 py-1 rounded-full bg-sky-500/10 text-sky-600 dark:text-sky-400 border border-sky-400/20">
+              {homeworkList.length} Submissions
+            </span>
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 sm:gap-5">
+            {homeworkList.map((hw) => (
+              <div
+                key={hw.id}
+                onClick={() => onSelectLesson({
+                  ...hw,
+                  isHomework: true,
+                  uploader: hw.studentName,
+                  uploaderEmail: hw.studentEmail,
+                  type: 'photo'
+                } as any)}
+                className="group relative rounded-2xl ios-glass border border-sky-400/15 hover:border-sky-400/50 hover:shadow-[0_8px_30px_rgba(14,165,233,0.15)] transition-all duration-200 overflow-hidden cursor-pointer flex flex-col shadow-xs p-4 space-y-3"
+              >
+                <div className="flex items-start justify-between gap-2">
+                  <span className="px-2.5 py-0.5 rounded-md bg-sky-500/15 text-sky-700 dark:text-sky-300 text-[10px] font-mono font-bold uppercase tracking-wider">
+                    Homework
+                  </span>
+                  <span className="text-[11px] text-slate-400 font-mono">
+                    {new Date(hw.createdAt).toLocaleDateString()}
+                  </span>
+                </div>
+                <div>
+                  <h4 className="font-bold text-sm text-slate-900 dark:text-white group-hover:text-sky-600 dark:group-hover:text-sky-400 transition-colors line-clamp-1">
+                    {hw.title}
+                  </h4>
+                  {hw.description && (
+                    <p className="text-xs text-slate-500 dark:text-slate-400 line-clamp-2 mt-1 leading-relaxed">
+                      {hw.description}
+                    </p>
+                  )}
+                </div>
+                <div className="pt-2 border-t border-sky-400/10 flex items-center justify-between text-[11px] text-slate-500">
+                  <span className="truncate">Student: {hw.studentName}</span>
+                  <span className="text-sky-600 dark:text-sky-400 font-bold group-hover:underline flex items-center gap-1">
+                    <span>Open</span>
+                    <span>→</span>
+                  </span>
+                </div>
+              </div>
+            ))}
+          </div>
         </div>
       )}
 

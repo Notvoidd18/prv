@@ -27,7 +27,8 @@ import {
   Sparkles,
   Copy,
   ChevronLeft,
-  ChevronRight
+  ChevronRight,
+  Download
 } from 'lucide-react';
 import { LessonRecord, HomeworkRecord, AppUser } from '../types.ts';
 
@@ -84,6 +85,8 @@ export const VideoPlayerModal: React.FC<VideoPlayerModalProps> = ({
 
   // Multi-photo and AI study notes state
   const [currentPhotoIndex, setCurrentPhotoIndex] = useState(0);
+  const [touchStartX, setTouchStartX] = useState<number | null>(null);
+  const [touchEndX, setTouchEndX] = useState<number | null>(null);
   const [copiedAi, setCopiedAi] = useState(false);
 
   // Delete state
@@ -500,6 +503,17 @@ export const VideoPlayerModal: React.FC<VideoPlayerModalProps> = ({
                 </div>
               )}
 
+              {/* Download Button */}
+              <a
+                href={`${streamUrl}&download=1`}
+                download={lesson.fileName || 'download'}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-sky-500 hover:bg-sky-600 text-white text-xs font-bold shadow-md transition-all cursor-pointer"
+                title="Download file"
+              >
+                <Download className="w-3.5 h-3.5" />
+                <span className="hidden sm:inline">Download</span>
+              </a>
+
               <button
                 onClick={onClose}
                 className="p-1.5 rounded-xl text-neutral-400 hover:text-black dark:hover:text-white hover:bg-black/5 dark:hover:bg-white/10 transition-colors cursor-pointer"
@@ -551,8 +565,33 @@ export const VideoPlayerModal: React.FC<VideoPlayerModalProps> = ({
               </div>
             </div>
           ) : isPhoto ? (
-            /* Photo Viewer with Multi-page navigation */
-            <div className="relative w-full h-full flex items-center justify-center p-3">
+            /* Photo Viewer with Multi-page navigation & touch swipe support */
+            <div
+              className="relative w-full h-full flex items-center justify-center p-3 select-none touch-pan-y"
+              onTouchStart={(e) => {
+                if (!hasMultiplePhotos) return;
+                setTouchEndX(null);
+                setTouchStartX(e.targetTouches[0].clientX);
+              }}
+              onTouchMove={(e) => {
+                if (!hasMultiplePhotos) return;
+                setTouchEndX(e.targetTouches[0].clientX);
+              }}
+              onTouchEnd={() => {
+                if (!hasMultiplePhotos || touchStartX === null || touchEndX === null) return;
+                const distance = touchStartX - touchEndX;
+                const minSwipeDistance = 50;
+                if (distance > minSwipeDistance) {
+                  // Swipe left -> next
+                  setCurrentPhotoIndex((prev) => Math.min(photoFiles.length - 1, prev + 1));
+                } else if (distance < -minSwipeDistance) {
+                  // Swipe right -> prev
+                  setCurrentPhotoIndex((prev) => Math.max(0, prev - 1));
+                }
+                setTouchStartX(null);
+                setTouchEndX(null);
+              }}
+            >
               <img
                 key={streamUrl}
                 src={streamUrl}
@@ -563,18 +602,19 @@ export const VideoPlayerModal: React.FC<VideoPlayerModalProps> = ({
               />
 
               {hasMultiplePhotos && (
-                <div className="absolute bottom-4 left-1/2 -translate-x-1/2 flex items-center gap-3 px-3.5 py-1.5 rounded-full bg-black/75 backdrop-blur-md text-white text-xs z-30 border border-white/10 shadow-lg">
+                <div className="absolute bottom-4 left-1/2 -translate-x-1/2 flex items-center gap-3 px-4 py-2 rounded-full bg-black/80 backdrop-blur-md text-white text-xs z-30 border border-white/15 shadow-xl">
                   <button
                     onClick={() => setCurrentPhotoIndex((prev) => Math.max(0, prev - 1))}
                     disabled={currentPhotoIndex === 0}
-                    className="p-1 rounded-full hover:bg-white/20 disabled:opacity-30 cursor-pointer transition-colors"
+                    className="p-1.5 rounded-full hover:bg-white/20 disabled:opacity-30 cursor-pointer transition-colors"
                     title="Previous Page"
+                    aria-label="Previous Page"
                   >
                     <ChevronLeft className="w-4 h-4" />
                   </button>
 
-                  <span className="font-mono text-[11px] font-bold tracking-tight">
-                    Page {currentPhotoIndex + 1} of {photoFiles.length}
+                  <span className="font-mono text-xs font-bold tracking-tight">
+                    Page {currentPhotoIndex + 1} of {photoFiles.length} (Swipe to navigate)
                   </span>
 
                   <button
@@ -582,8 +622,9 @@ export const VideoPlayerModal: React.FC<VideoPlayerModalProps> = ({
                       setCurrentPhotoIndex((prev) => Math.min(photoFiles.length - 1, prev + 1))
                     }
                     disabled={currentPhotoIndex === photoFiles.length - 1}
-                    className="p-1 rounded-full hover:bg-white/20 disabled:opacity-30 cursor-pointer transition-colors"
+                    className="p-1.5 rounded-full hover:bg-white/20 disabled:opacity-30 cursor-pointer transition-colors"
                     title="Next Page"
+                    aria-label="Next Page"
                   >
                     <ChevronRight className="w-4 h-4" />
                   </button>
@@ -596,6 +637,7 @@ export const VideoPlayerModal: React.FC<VideoPlayerModalProps> = ({
               <video
                 ref={videoRef}
                 src={streamUrl}
+                preload="metadata"
                 autoPlay
                 playsInline
                 controlsList="nodownload nofullscreen"

@@ -94,6 +94,7 @@ export const AuthGateway: React.FC<AuthGatewayProps> = ({ onSignInSuccess }) => 
             )}
             <span>Sign in with Google</span>
           </button>
+
           <div className="flex items-center justify-center gap-1.5 text-[10px] text-slate-400">
             <Lock className="w-3 h-3 text-sky-500" />
             <span>Strict role protection • Encrypted streaming</span>

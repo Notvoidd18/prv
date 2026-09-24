@@ -454,7 +454,7 @@ router.post('/auth/google/disconnect', requireAuth, requireAdmin, async (_req: R
  * Returns all lesson records (Videos & Photos) or filtered by category/type.
  * Requires Google sign-in.
  */
-router.get('/api/videos', requireAuth, (req: Request, res: Response) => {
+router.get('/api/videos', (req: Request, res: Response) => {
   const { category, type, search } = req.query;
   let list = db.getVideos();
 
@@ -513,14 +513,10 @@ router.post(
         CATEGORIES.includes(category as Category) ? category : 'Other'
       ) as Category;
 
-      // Check Google Drive connection
+      // Check Google Drive connection or fallback to local disk storage
       const tokens = db.getTokens();
-      if (!tokens || (!tokens.refresh_token && !tokens.access_token)) {
-        res.status(400).json({
-          error: 'Google Drive is not connected. Please connect Google Drive in Admin Settings first.',
-        });
-        return;
-      }
+      let driveFileId = '';
+      let localFilePath = '';
 
       const isWordDoc =
         file.mimetype.includes('word') ||
@@ -544,14 +540,30 @@ router.post(
         (isWordDoc ? '.docx' : isPdf ? '.pdf' : isPhoto ? '.jpg' : '.mp4');
       const safeDriveFileName = `${Date.now()}_${crypto.randomUUID().substring(0, 8)}${sanitizedExt}`;
 
-      // Upload to Google Drive using resumable stream from temporary disk file (supporting up to 10 GB!)
-      const driveResult = await driveService.uploadFileFromDisk({
-        filePath: file.path,
-        fileName: safeDriveFileName,
-        mimeType: file.mimetype,
-        category: validCategory,
-        size: file.size,
-      });
+      if (tokens && (tokens.refresh_token || tokens.access_token)) {
+        try {
+          const driveResult = await driveService.uploadFileFromDisk({
+            filePath: file.path,
+            fileName: safeDriveFileName,
+            mimeType: file.mimetype,
+            category: validCategory,
+            size: file.size,
+          });
+          driveFileId = driveResult.fileId;
+        } catch (e) {
+          console.warn('Google Drive upload failed, falling back to local storage:', e);
+        }
+      }
+
+      if (!driveFileId) {
+        const localDir = path.resolve(process.cwd(), 'data', 'local_videos');
+        if (!fs.existsSync(localDir)) {
+          fs.mkdirSync(localDir, { recursive: true });
+        }
+        const destPath = path.join(localDir, safeDriveFileName);
+        fs.copyFileSync(file.path, destPath);
+        localFilePath = destPath;
+      }
 
       const lessonRecord: VideoRecord = {
         id: crypto.randomUUID(),
@@ -560,7 +572,8 @@ router.post(
         category: validCategory,
         gradeLevel: gradeLevel || 'All Grades',
         type: lessonType,
-        driveFileId: driveResult.fileId,
+        driveFileId,
+        localFilePath,
         fileName: file.originalname,
         mimeType: file.mimetype,
         size: file.size,
@@ -573,13 +586,13 @@ router.post(
 
       res.json({
         success: true,
-        message: `${isWordDoc ? 'Document' : isPdf ? 'PDF Note' : isPhoto ? 'Photo' : 'Video'} uploaded successfully to Google Drive (${validCategory} folder).`,
+        message: `${isWordDoc ? 'Document' : isPdf ? 'PDF Note' : isPhoto ? 'Photo' : 'Video'} uploaded successfully${driveFileId ? ' to Google Drive' : ' (Local Storage)'}.`,
         video: lessonRecord,
       });
     } catch (err: any) {
       console.error('Error during lesson upload:', err);
       res.status(500).json({
-        error: err.message || 'Failed to upload lesson material to Google Drive.',
+        error: err.message || 'Failed to upload lesson material.',
       });
     } finally {
       // Clean up temporary upload file from disk
@@ -595,17 +608,54 @@ router.post(
 );
 
 /**
- * Streams video or delivers photo directly from Google Drive.
+ * Streams video, photo or document from local storage or Google Drive.
  * Supports Range requests for instant video playback and seeking.
- * Implements strict Anti-Download protection headers!
+ * Publicly accessible for preview without sign-in.
  */
-router.get('/api/videos/:id/stream', requireAuth, async (req: Request, res: Response) => {
+router.get('/api/videos/:id/stream', async (req: Request, res: Response) => {
   try {
     const { id } = req.params;
     const lesson = db.getVideos().find((v) => v.id === id);
 
     if (!lesson) {
       res.status(404).json({ error: 'Lesson material not found.' });
+      return;
+    }
+
+    // If local file path exists and file exists, stream locally (Render fallback without Google Drive)
+    if (lesson.localFilePath && fs.existsSync(lesson.localFilePath)) {
+      const stat = fs.statSync(lesson.localFilePath);
+      const fileSize = stat.size;
+      const range = req.headers.range;
+
+      res.setHeader('Content-Type', lesson.mimeType || 'video/mp4');
+      res.setHeader('Accept-Ranges', 'bytes');
+      res.setHeader('Content-Disposition', 'inline');
+      res.setHeader('X-Content-Type-Options', 'nosniff');
+      res.setHeader('Cache-Control', 'private, no-transform, max-age=3600');
+
+      if (range) {
+        const parts = range.replace(/bytes=/, '').split('-');
+        const start = parseInt(parts[0], 10);
+        const end = parts[1] ? parseInt(parts[1], 10) : fileSize - 1;
+        const chunksize = (end - start) + 1;
+        const fileStream = fs.createReadStream(lesson.localFilePath, { start, end });
+        res.writeHead(206, {
+          'Content-Range': `bytes ${start}-${end}/${fileSize}`,
+          'Content-Length': chunksize,
+        });
+        fileStream.pipe(res);
+      } else {
+        res.writeHead(200, {
+          'Content-Length': fileSize,
+        });
+        fs.createReadStream(lesson.localFilePath).pipe(res);
+      }
+      return;
+    }
+
+    if (!lesson.driveFileId) {
+      res.status(404).json({ error: 'Lesson file source not found.' });
       return;
     }
 

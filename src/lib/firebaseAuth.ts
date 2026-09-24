@@ -59,6 +59,10 @@ export const signInWithGoogle = async (): Promise<{
     return { user: result.user, appUser };
   } catch (error: any) {
     console.error('Sign-in error:', error);
+    if (error?.code === 'auth/unauthorized-domain') {
+      const currentDomain = window.location.hostname;
+      throw new Error(`Firebase Unauthorized Domain: "${currentDomain}". Please add this domain to your Firebase Console under Authentication -> Settings -> Authorized Domains.`);
+    }
     throw error;
   } finally {
     isSigningIn = false;
@@ -113,6 +117,10 @@ export const connectGoogleDrive = async (
     };
   } catch (error: any) {
     console.error('Google Drive sign-in error:', error);
+    if (error?.code === 'auth/unauthorized-domain') {
+      const currentDomain = window.location.hostname;
+      throw new Error(`Firebase Unauthorized Domain: "${currentDomain}". Please add this domain to your Firebase Console under Authentication -> Settings -> Authorized Domains.`);
+    }
     throw error;
   } finally {
     isSigningIn = false;

@@ -25,6 +25,7 @@ import {
 } from 'lucide-react';
 import { OAuthConfig, AppUser, LessonRecord } from '../types.ts';
 import { AdminUserManagement } from './AdminUserManagement.tsx';
+import { connectGoogleDrive } from '../lib/firebaseAuth.ts';
 
 interface AdminSettingsProps {
   config: OAuthConfig | null;
@@ -785,27 +786,59 @@ export const AdminSettings: React.FC<AdminSettingsProps> = ({
             )}
           </div>
 
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
-            <div className="p-4 bg-sky-500/5 rounded-xl border border-sky-400/15 space-y-1.5">
-              <div className="font-bold text-slate-700 dark:text-slate-300">Root Storage Folder</div>
-              <div className="font-mono text-sky-700 dark:text-sky-300 font-bold">
-                {config?.drive?.rootFolderName || 'PrivateTeacherVideos'}
+          {!config?.connected ? (
+            <div className="p-6 rounded-xl bg-sky-500/10 border border-sky-400/30 text-center space-y-4">
+              <div className="w-12 h-12 bg-sky-500/20 text-sky-600 dark:text-sky-400 rounded-2xl flex items-center justify-center mx-auto border border-sky-400/30">
+                <HardDrive className="w-6 h-6" />
               </div>
-              <div className="text-[11px] text-slate-400">
-                Google Drive Folder ID: {config?.drive?.rootFolderId || 'Auto-Provisioned'}
+              <div className="space-y-1">
+                <h3 className="text-sm font-bold text-slate-900 dark:text-white">Google Drive is not connected</h3>
+                <p className="text-xs text-slate-500 dark:text-slate-400 max-w-md mx-auto">
+                  Connect your Google One 2 TB Drive to sync and store all uploaded lesson videos, photos, and PDF notes directly to your Google Drive account.
+                </p>
               </div>
+              <button
+                onClick={async () => {
+                  try {
+                    setActionMessage('Connecting to Google Drive...');
+                    await connectGoogleDrive(currentUser.email);
+                    setActionMessage('Google Drive connected successfully!');
+                    onRefresh();
+                    setTimeout(() => setActionMessage(null), 3500);
+                  } catch (err: any) {
+                    setErrorMessage(err.message || 'Failed to connect Google Drive.');
+                    setTimeout(() => setErrorMessage(null), 4000);
+                  }
+                }}
+                className="px-5 py-2.5 rounded-xl font-bold text-xs text-white bg-gradient-to-r from-sky-500 to-blue-600 hover:from-sky-600 hover:to-blue-700 shadow-md shadow-sky-500/30 cursor-pointer inline-flex items-center gap-2"
+              >
+                <HardDrive className="w-4 h-4" />
+                <span>Connect Google Drive</span>
+              </button>
             </div>
+          ) : (
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
+              <div className="p-4 bg-sky-500/5 rounded-xl border border-sky-400/15 space-y-1.5">
+                <div className="font-bold text-slate-700 dark:text-slate-300">Root Storage Folder</div>
+                <div className="font-mono text-sky-700 dark:text-sky-300 font-bold">
+                  {config?.drive?.rootFolderName || 'PrivateTeacherVideos'}
+                </div>
+                <div className="text-[11px] text-slate-400">
+                  Google Drive Folder ID: {config?.drive?.rootFolderId || 'Auto-Provisioned'}
+                </div>
+              </div>
 
-            <div className="p-4 bg-sky-500/5 rounded-xl border border-sky-400/15 space-y-1.5">
-              <div className="font-bold text-slate-700 dark:text-slate-300">OAuth Access Scope</div>
-              <div className="font-mono text-sky-700 dark:text-sky-300 font-semibold truncate">
-                https://www.googleapis.com/auth/drive.file
-              </div>
-              <div className="text-[11px] text-slate-400">
-                Restricted to files created by 10PrvDriver only.
+              <div className="p-4 bg-sky-500/5 rounded-xl border border-sky-400/15 space-y-1.5">
+                <div className="font-bold text-slate-700 dark:text-slate-300">OAuth Access Scope</div>
+                <div className="font-mono text-sky-700 dark:text-sky-300 font-semibold truncate">
+                  https://www.googleapis.com/auth/drive.file
+                </div>
+                <div className="text-[11px] text-slate-400">
+                  Restricted to files created by 10PrvDriver only.
+                </div>
               </div>
             </div>
-          </div>
+          )}
         </div>
       )}
     </div>

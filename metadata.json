@@ -1,0 +1,6 @@
+{
+  "name": "10PrvDriver",
+  "description": "Secure teacher video uploads and classroom streaming directly integrated with your Google One 2 TB Drive.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

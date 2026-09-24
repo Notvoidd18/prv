@@ -24,6 +24,7 @@ export interface VideoRecord {
   gradeLevel?: string;
   type: LessonType;
   driveFileId: string;
+  localFilePath?: string;
   fileName: string;
   mimeType: string;
   size: number;

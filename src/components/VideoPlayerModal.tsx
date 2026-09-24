@@ -113,21 +113,23 @@ export const VideoPlayerModal: React.FC<VideoPlayerModalProps> = ({
   useEffect(() => {
     if (!isVideo || !videoRef.current) return;
     const video = videoRef.current;
-    const hlsUrl = masterPlaylistUrl || `/api/videos/${lesson.id}/hls/master.m3u8`;
     const fallbackUrl = `/api/videos/${lesson.id}/stream?auth=${encodeURIComponent(currentUser?.email || '')}`;
 
     let hlsInstance: any = null;
 
-    if (Hls.isSupported()) {
+    // Only attempt HLS when masterPlaylistUrl is explicitly available
+    if (masterPlaylistUrl && Hls.isSupported()) {
       hlsInstance = new Hls({
         capLevelToPlayerSize: true,
         autoStartLoad: true,
+        maxBufferLength: 30,
+        maxMaxBufferLength: 60,
       });
       hlsRef.current = hlsInstance;
-      hlsInstance.loadSource(hlsUrl);
+      hlsInstance.loadSource(masterPlaylistUrl);
       hlsInstance.attachMedia(video);
 
-      hlsInstance.on(Hls.Events.MANIFEST_PARSED, (event: any, data: any) => {
+      hlsInstance.on(Hls.Events.MANIFEST_PARSED, (_event: any, data: any) => {
         const levels = (data.levels || []).map((lvl: any) => `${lvl.height}p` as any as QualityOption);
         if (levels.length > 0) {
           setAvailableQualities(['Auto', ...(Array.from(new Set(levels)) as QualityOption[])]);
@@ -135,35 +137,30 @@ export const VideoPlayerModal: React.FC<VideoPlayerModalProps> = ({
         video.play().catch(() => {});
       });
 
-      hlsInstance.on(Hls.Events.LEVEL_SWITCHED, (event: any, data: any) => {
-        const lvl = hlsInstance.levels[data.level];
+      hlsInstance.on(Hls.Events.LEVEL_SWITCHED, (_event: any, data: any) => {
+        const lvl = hlsInstance?.levels[data.level];
         if (lvl) {
           setQualitySwitchNotice(`Adaptive Quality: ${lvl.height}p`);
           setTimeout(() => setQualitySwitchNotice(null), 2500);
         }
       });
 
-      hlsInstance.on(Hls.Events.ERROR, (event: any, data: any) => {
+      hlsInstance.on(Hls.Events.ERROR, (_event: any, data: any) => {
         if (data.fatal) {
-          switch (data.type) {
-            case Hls.ErrorTypes.NETWORK_ERROR:
-              hlsInstance.startLoad();
-              break;
-            case Hls.ErrorTypes.MEDIA_ERROR:
-              hlsInstance.recoverMediaError();
-              break;
-            default:
-              hlsInstance.destroy();
-              hlsRef.current = null;
-              video.src = fallbackUrl;
-              break;
-          }
+          console.warn('HLS encountered fatal error, smoothly falling back to progressive stream:', data.details);
+          hlsInstance?.destroy();
+          hlsRef.current = null;
+          video.src = fallbackUrl;
+          video.load();
+          video.play().catch(() => {});
         }
       });
-    } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
-      video.src = hlsUrl;
+    } else if (masterPlaylistUrl && video.canPlayType('application/vnd.apple.mpegurl')) {
+      video.src = masterPlaylistUrl;
+      video.play().catch(() => {});
     } else {
       video.src = fallbackUrl;
+      video.play().catch(() => {});
     }
 
     return () => {
@@ -712,7 +709,6 @@ export const VideoPlayerModal: React.FC<VideoPlayerModalProps> = ({
             <>
               <video
                 ref={videoRef}
-                src={streamUrl}
                 preload="metadata"
                 autoPlay
                 playsInline
@@ -723,10 +719,21 @@ export const VideoPlayerModal: React.FC<VideoPlayerModalProps> = ({
                 onPlaying={() => {
                   setIsBuffering(false);
                   setIsPlaying(true);
+                  setLoadError(null);
                 }}
                 onPause={() => setIsPlaying(false)}
                 onError={() => {
                   setIsBuffering(false);
+                  if (hlsRef.current) {
+                    hlsRef.current.destroy();
+                    hlsRef.current = null;
+                    if (videoRef.current) {
+                      videoRef.current.src = streamUrl;
+                      videoRef.current.load();
+                      videoRef.current.play().catch(() => {});
+                      return;
+                    }
+                  }
                   setLoadError('Video failed to stream. Please verify your connection.');
                 }}
                 onClick={togglePlay}

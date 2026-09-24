@@ -131,12 +131,13 @@ export const StudentHub: React.FC<StudentHubProps> = ({
   };
 
   const fetchHomework = async () => {
-    if (!currentUser) return;
     try {
       setLoading(true);
-      const res = await fetch('/api/homework', {
-        headers: { 'x-user-email': currentUser.email },
-      });
+      const headers: Record<string, string> = {};
+      if (currentUser?.email) {
+        headers['x-user-email'] = currentUser.email;
+      }
+      const res = await fetch('/api/homework', { headers });
       if (res.ok) {
         const data = await res.json();
         setHomeworkList(data.homework || []);
@@ -934,9 +935,15 @@ export const StudentHub: React.FC<StudentHubProps> = ({
                     </div>
 
                     {/* Title & Description */}
-                    <div>
-                      <h3 className="text-sm font-bold text-slate-900 dark:text-white group-hover:text-sky-600 dark:group-hover:text-sky-400 transition-colors">
-                        {hw.title}
+                    <div
+                      onClick={() => onOpenPreview?.(hw)}
+                      className="cursor-pointer group/title"
+                    >
+                      <h3 className="text-sm font-bold text-slate-900 dark:text-white group-hover/title:text-sky-600 dark:group-hover/title:text-sky-400 transition-colors flex items-center justify-between">
+                        <span>{hw.title}</span>
+                        <span className="text-[10px] font-semibold text-sky-600 dark:text-sky-400 opacity-0 group-hover/title:opacity-100 transition-opacity">
+                          Click to View →
+                        </span>
                       </h3>
                       {hw.description && (
                         <p className="text-xs text-slate-600 dark:text-slate-300 mt-1 leading-relaxed">

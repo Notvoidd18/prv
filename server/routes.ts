@@ -815,7 +815,7 @@ router.delete('/api/subjects/:name', requireAdmin, (req: Request, res: Response)
  * Lists shared student homework & notes.
  * All authenticated users (students & teachers) can browse and study shared materials!
  */
-router.get('/api/homework', requireAuth, (req: Request, res: Response) => {
+router.get('/api/homework', (req: Request, res: Response) => {
   const allHomework = db.getHomework();
   res.json({ homework: allHomework });
 });
@@ -884,7 +884,7 @@ router.post(
 /**
  * Streams / previews a homework file (or specific photo index)
  */
-router.get('/api/homework/:id/stream', requireAuth, (req: Request, res: Response) => {
+router.get('/api/homework/:id/stream', (req: Request, res: Response) => {
   const { id } = req.params;
   const fileIndex = parseInt(req.query.fileIndex as string, 10);
   const hw = db.getHomework().find((h) => h.id === id);

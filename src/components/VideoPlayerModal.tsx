@@ -184,6 +184,12 @@ export const VideoPlayerModal: React.FC<VideoPlayerModalProps> = ({
 
   if (!lesson) return null;
 
+  const hasApiKey = Boolean(
+    currentUser?.geminiApiKey ||
+    (currentUser?.email ? localStorage.getItem(`10prv_gemini_key_${currentUser.email}`) : '') ||
+    localStorage.getItem('10prv_global_gemini_key')
+  );
+
   const isHomework = (lesson as any).studentEmail !== undefined || (lesson as any).isHomework;
   const isPhoto = lesson.type === 'photo';
   const isPdf = lesson.type === 'pdf';
@@ -511,7 +517,7 @@ export const VideoPlayerModal: React.FC<VideoPlayerModalProps> = ({
           className={`relative bg-neutral-950 flex items-center justify-center overflow-hidden group ${
             isFullscreen
               ? 'flex-1 h-full w-full'
-              : isPdf || isDoc
+              : isPdf || isDoc || isPhoto
               ? 'w-full h-[75vh] min-h-[520px]'
               : 'aspect-video w-full'
           }`}
@@ -865,8 +871,8 @@ export const VideoPlayerModal: React.FC<VideoPlayerModalProps> = ({
               </div>
             </div>
 
-            {/* AI Extracted Notes and Study Solutions */}
-            {Boolean((lesson as HomeworkRecord)?.aiExtractedText) && (
+            {/* AI Extracted Notes and Study Solutions (Only if API key is configured) */}
+            {hasApiKey && Boolean((lesson as HomeworkRecord)?.aiExtractedText) && (
               <div className="p-4 rounded-xl bg-black/5 dark:bg-white/5 border border-black/10 dark:border-white/10 space-y-2">
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-1.5 text-xs font-bold text-black dark:text-white">

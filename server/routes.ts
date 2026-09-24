@@ -686,9 +686,29 @@ router.get('/api/videos/:id/poster', (req: Request, res: Response) => {
     res.setHeader('ETag', etag);
     res.setHeader('Last-Modified', stat.mtime.toUTCString());
     fs.createReadStream(posterPath).pipe(res);
-  } else {
-    res.status(404).send('Poster not found');
+    return;
   }
+
+  // On-demand generation if local file exists
+  const lesson = db.getVideos().find((v) => v.id === id);
+  if (lesson?.localFilePath && fs.existsSync(lesson.localFilePath)) {
+    processVideoMedia(lesson.id, lesson.localFilePath)
+      .then((meta) => {
+        if (meta.posterPath && fs.existsSync(meta.posterPath)) {
+          const current = db.getVideos().find((v) => v.id === lesson.id);
+          if (current) {
+            current.posterUrl = `/api/videos/${current.id}/poster`;
+            current.masterPlaylistUrl = meta.masterPlaylistPath ? `/api/videos/${current.id}/hls/master.m3u8` : undefined;
+            current.availableQualities = meta.availableQualities;
+            current.processingStatus = 'ready';
+            db.saveVideo(current);
+          }
+        }
+      })
+      .catch(() => {});
+  }
+
+  res.status(404).send('Poster not found');
 });
 
 /**

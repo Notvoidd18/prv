@@ -8,6 +8,7 @@ import multer from 'multer';
 import { GoogleGenAI } from '@google/genai';
 import { db, VideoRecord, HomeworkRecord, UserRole, SUPER_ADMIN_EMAIL } from './db.js';
 import { driveService, Category, CATEGORIES } from './driveService.js';
+import { processVideoMedia, processImageMedia } from './mediaService.js';
 
 export const router = express.Router();
 
@@ -577,12 +578,62 @@ router.post(
         fileName: file.originalname,
         mimeType: file.mimetype,
         size: file.size,
+        processingStatus: 'processing',
         createdAt: new Date().toISOString(),
         uploader: user.name || user.email.split('@')[0],
         uploaderEmail: user.email,
       };
 
       db.saveVideo(lessonRecord);
+
+      // Background media processing for instant streaming & thumbnails
+      const processingFilePath = localFilePath || file.path;
+      if (processingFilePath && fs.existsSync(processingFilePath)) {
+        if (lessonType === 'video') {
+          processVideoMedia(lessonRecord.id, processingFilePath)
+            .then((meta) => {
+              const current = db.getVideos().find((v) => v.id === lessonRecord.id);
+              if (current) {
+                current.duration = meta.duration;
+                current.posterUrl = meta.posterPath ? `/api/videos/${current.id}/poster` : undefined;
+                current.masterPlaylistUrl = meta.masterPlaylistPath ? `/api/videos/${current.id}/hls/master.m3u8` : undefined;
+                current.availableQualities = meta.availableQualities;
+                current.processingStatus = 'ready';
+                db.saveVideo(current);
+              }
+            })
+            .catch((err) => {
+              console.error('Video background processing error:', err);
+              const current = db.getVideos().find((v) => v.id === lessonRecord.id);
+              if (current) {
+                current.processingStatus = 'ready';
+                db.saveVideo(current);
+              }
+            });
+        } else if (lessonType === 'photo') {
+          processImageMedia(lessonRecord.id, processingFilePath)
+            .then(() => {
+              const current = db.getVideos().find((v) => v.id === lessonRecord.id);
+              if (current) {
+                current.processingStatus = 'ready';
+                db.saveVideo(current);
+              }
+            })
+            .catch(() => {
+              const current = db.getVideos().find((v) => v.id === lessonRecord.id);
+              if (current) {
+                current.processingStatus = 'ready';
+                db.saveVideo(current);
+              }
+            });
+        } else {
+          lessonRecord.processingStatus = 'ready';
+          db.saveVideo(lessonRecord);
+        }
+      } else {
+        lessonRecord.processingStatus = 'ready';
+        db.saveVideo(lessonRecord);
+      }
 
       res.json({
         success: true,
@@ -608,6 +659,140 @@ router.post(
 );
 
 /**
+ * Serve video poster image
+ */
+router.get('/api/videos/:id/poster', (req: Request, res: Response) => {
+  const { id } = req.params;
+  const posterPath = path.resolve(process.cwd(), 'data', 'media_cache', id, 'poster.jpg');
+  
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, HEAD, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Range');
+
+  if (req.method === 'OPTIONS') {
+    res.status(204).end();
+    return;
+  }
+
+  if (fs.existsSync(posterPath)) {
+    const stat = fs.statSync(posterPath);
+    const etag = `"${stat.size}-${stat.mtimeMs}"`;
+    if (req.headers['if-none-match'] === etag) {
+      res.status(304).end();
+      return;
+    }
+    res.setHeader('Content-Type', 'image/jpeg');
+    res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
+    res.setHeader('ETag', etag);
+    res.setHeader('Last-Modified', stat.mtime.toUTCString());
+    fs.createReadStream(posterPath).pipe(res);
+  } else {
+    res.status(404).send('Poster not found');
+  }
+});
+
+/**
+ * Serve image thumbnail variant
+ */
+router.get('/api/videos/:id/thumbnail', (req: Request, res: Response) => {
+  const { id } = req.params;
+  const thumbPath = path.resolve(process.cwd(), 'data', 'media_cache', id, 'thumb.jpg');
+
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, HEAD, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Range');
+
+  if (req.method === 'OPTIONS') {
+    res.status(204).end();
+    return;
+  }
+
+  if (fs.existsSync(thumbPath)) {
+    const stat = fs.statSync(thumbPath);
+    const etag = `"${stat.size}-${stat.mtimeMs}"`;
+    if (req.headers['if-none-match'] === etag) {
+      res.status(304).end();
+      return;
+    }
+    res.setHeader('Content-Type', 'image/jpeg');
+    res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
+    res.setHeader('ETag', etag);
+    res.setHeader('Last-Modified', stat.mtime.toUTCString());
+    fs.createReadStream(thumbPath).pipe(res);
+  } else {
+    res.redirect(`/api/videos/${id}/stream`);
+  }
+});
+
+/**
+ * Serve HLS master playlist and segments with Range support and CORS
+ */
+router.get('/api/videos/:id/hls/*', (req: Request, res: Response) => {
+  const { id } = req.params;
+  const subPath = req.params[0] || '';
+  const hlsDir = path.resolve(process.cwd(), 'data', 'media_cache', id, 'hls');
+  const targetPath = path.resolve(hlsDir, subPath);
+
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, HEAD, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Range');
+
+  if (req.method === 'OPTIONS') {
+    res.status(204).end();
+    return;
+  }
+
+  if (!targetPath.startsWith(hlsDir)) {
+    res.status(403).send('Forbidden');
+    return;
+  }
+
+  if (fs.existsSync(targetPath) && fs.statSync(targetPath).isFile()) {
+    const stat = fs.statSync(targetPath);
+    const ext = path.extname(targetPath).toLowerCase();
+    const etag = `"${stat.size}-${stat.mtimeMs}"`;
+
+    if (req.headers['if-none-match'] === etag) {
+      res.status(304).end();
+      return;
+    }
+
+    res.setHeader('ETag', etag);
+    res.setHeader('Last-Modified', stat.mtime.toUTCString());
+
+    if (ext === '.m3u8') {
+      res.setHeader('Content-Type', 'application/vnd.apple.mpegurl; charset=utf-8');
+      res.setHeader('Cache-Control', 'private, no-cache, no-store, must-revalidate');
+      fs.createReadStream(targetPath).pipe(res);
+    } else if (ext === '.ts' || ext === '.m4s') {
+      res.setHeader('Content-Type', 'video/mp2t');
+      res.setHeader('Accept-Ranges', 'bytes');
+      res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
+
+      const range = req.headers.range;
+      if (range) {
+        const parts = range.replace(/bytes=/, '').split('-');
+        const start = parseInt(parts[0], 10);
+        const end = parts[1] ? parseInt(parts[1], 10) : stat.size - 1;
+        const chunksize = end - start + 1;
+        res.writeHead(206, {
+          'Content-Range': `bytes ${start}-${end}/${stat.size}`,
+          'Content-Length': chunksize,
+        });
+        fs.createReadStream(targetPath, { start, end }).pipe(res);
+      } else {
+        res.setHeader('Content-Length', stat.size);
+        fs.createReadStream(targetPath).pipe(res);
+      }
+    } else {
+      fs.createReadStream(targetPath).pipe(res);
+    }
+  } else {
+    res.status(404).send('HLS segment not found');
+  }
+});
+
+/**
  * Streams video, photo or document from local storage or Google Drive.
  * Supports Range requests for instant video playback and seeking.
  * Publicly accessible for preview without sign-in.
@@ -616,6 +801,15 @@ router.get('/api/videos/:id/stream', async (req: Request, res: Response) => {
   try {
     const { id } = req.params;
     const lesson = db.getVideos().find((v) => v.id === id);
+
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.setHeader('Access-Control-Allow-Methods', 'GET, HEAD, OPTIONS');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Range');
+
+    if (req.method === 'OPTIONS') {
+      res.status(204).end();
+      return;
+    }
 
     if (!lesson) {
       res.status(404).json({ error: 'Lesson material not found.' });

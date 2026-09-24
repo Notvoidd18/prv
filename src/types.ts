@@ -25,6 +25,10 @@ export interface LessonRecord {
   mimeType: string;
   size: number;
   duration?: number;
+  posterUrl?: string;
+  masterPlaylistUrl?: string;
+  availableQualities?: string[];
+  processingStatus?: 'processing' | 'ready' | 'failed';
   createdAt: string;
   uploader: string;
   uploaderEmail?: string;

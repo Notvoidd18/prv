@@ -1,4 +1,5 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
+import Hls from 'hls.js';
 import {
   X,
   HardDrive,
@@ -52,6 +53,15 @@ export const VideoPlayerModal: React.FC<VideoPlayerModalProps> = ({
   onClose,
   onDeleteLesson,
 }) => {
+  if (!lesson) return null;
+
+  const isHomework = (lesson as any).studentEmail !== undefined || (lesson as any).isHomework;
+  const isPhoto = lesson.type === 'photo';
+  const isPdf = lesson.type === 'pdf';
+  const isDoc = lesson.type === 'doc';
+  const isVideo = !isPhoto && !isPdf && !isDoc;
+  const masterPlaylistUrl = (lesson as any).masterPlaylistUrl;
+
   const [isPlaying, setIsPlaying] = useState(true);
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
@@ -98,6 +108,71 @@ export const VideoPlayerModal: React.FC<VideoPlayerModalProps> = ({
   const containerRef = useRef<HTMLDivElement>(null);
   const controlsTimeoutRef = useRef<any>(null);
   const pendingSeekTime = useRef<number | null>(null);
+  const hlsRef = useRef<any>(null);
+
+  useEffect(() => {
+    if (!isVideo || !videoRef.current) return;
+    const video = videoRef.current;
+    const hlsUrl = masterPlaylistUrl || `/api/videos/${lesson.id}/hls/master.m3u8`;
+    const fallbackUrl = `/api/videos/${lesson.id}/stream?auth=${encodeURIComponent(currentUser?.email || '')}`;
+
+    let hlsInstance: any = null;
+
+    if (Hls.isSupported()) {
+      hlsInstance = new Hls({
+        capLevelToPlayerSize: true,
+        autoStartLoad: true,
+      });
+      hlsRef.current = hlsInstance;
+      hlsInstance.loadSource(hlsUrl);
+      hlsInstance.attachMedia(video);
+
+      hlsInstance.on(Hls.Events.MANIFEST_PARSED, (event: any, data: any) => {
+        const levels = (data.levels || []).map((lvl: any) => `${lvl.height}p` as any as QualityOption);
+        if (levels.length > 0) {
+          setAvailableQualities(['Auto', ...(Array.from(new Set(levels)) as QualityOption[])]);
+        }
+        video.play().catch(() => {});
+      });
+
+      hlsInstance.on(Hls.Events.LEVEL_SWITCHED, (event: any, data: any) => {
+        const lvl = hlsInstance.levels[data.level];
+        if (lvl) {
+          setQualitySwitchNotice(`Adaptive Quality: ${lvl.height}p`);
+          setTimeout(() => setQualitySwitchNotice(null), 2500);
+        }
+      });
+
+      hlsInstance.on(Hls.Events.ERROR, (event: any, data: any) => {
+        if (data.fatal) {
+          switch (data.type) {
+            case Hls.ErrorTypes.NETWORK_ERROR:
+              hlsInstance.startLoad();
+              break;
+            case Hls.ErrorTypes.MEDIA_ERROR:
+              hlsInstance.recoverMediaError();
+              break;
+            default:
+              hlsInstance.destroy();
+              hlsRef.current = null;
+              video.src = fallbackUrl;
+              break;
+          }
+        }
+      });
+    } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
+      video.src = hlsUrl;
+    } else {
+      video.src = fallbackUrl;
+    }
+
+    return () => {
+      if (hlsInstance) {
+        hlsInstance.destroy();
+        hlsRef.current = null;
+      }
+    };
+  }, [lesson.id, isVideo, masterPlaylistUrl, currentUser?.email]);
 
   useEffect(() => {
     const timer = setInterval(() => {
@@ -185,19 +260,11 @@ export const VideoPlayerModal: React.FC<VideoPlayerModalProps> = ({
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [isFullscreen, isPlaying, onClose]);
 
-  if (!lesson) return null;
-
   const hasApiKey = Boolean(
     currentUser?.geminiApiKey ||
     (currentUser?.email ? localStorage.getItem(`10prv_gemini_key_${currentUser.email}`) : '') ||
     localStorage.getItem('10prv_global_gemini_key')
   );
-
-  const isHomework = (lesson as any).studentEmail !== undefined || (lesson as any).isHomework;
-  const isPhoto = lesson.type === 'photo';
-  const isPdf = lesson.type === 'pdf';
-  const isDoc = lesson.type === 'doc';
-  const isVideo = !isPhoto && !isPdf && !isDoc;
 
   const photoFiles = (lesson as HomeworkRecord)?.fileNames || [];
   const hasMultiplePhotos = photoFiles.length > 1;
@@ -296,17 +363,26 @@ export const VideoPlayerModal: React.FC<VideoPlayerModalProps> = ({
       return;
     }
 
-    const prevTime = videoRef.current ? videoRef.current.currentTime : 0;
-    pendingSeekTime.current = prevTime;
     setSelectedQuality(quality);
     setShowSettings(false);
 
-    setQualitySwitchNotice(`Switching to ${quality === 'Auto' ? 'Auto (Source)' : quality}...`);
+    setQualitySwitchNotice(`Quality: ${quality}`);
     setTimeout(() => {
       setQualitySwitchNotice(null);
-    }, 2200);
+    }, 2000);
 
-    if (videoRef.current) {
+    if (hlsRef.current) {
+      if (quality === 'Auto') {
+        hlsRef.current.currentLevel = -1; // Auto
+      } else {
+        const targetHeight = parseInt(quality.replace('p', ''), 10);
+        const levelIndex = hlsRef.current.levels.findIndex((l: any) => l.height === targetHeight);
+        if (levelIndex !== -1) {
+          hlsRef.current.currentLevel = levelIndex;
+        }
+      }
+    } else if (videoRef.current) {
+      const prevTime = videoRef.current.currentTime;
       const wasPaused = videoRef.current.paused;
       videoRef.current.src = `/api/videos/${lesson.id}/stream?auth=${encodeURIComponent(
         currentUser?.email || ''

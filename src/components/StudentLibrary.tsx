@@ -329,7 +329,7 @@ export const StudentLibrary: React.FC<StudentLibraryProps> = ({
                 <div className="relative aspect-video bg-slate-950 flex items-center justify-center overflow-hidden">
                   {item.type === 'photo' ? (
                     <img
-                      src={`/api/videos/${item.id}/stream?auth=${encodeURIComponent(currentUser?.email || '')}`}
+                      src={`/api/videos/${item.id}/thumbnail`}
                       alt={item.title}
                       loading="lazy"
                       className="w-full h-full object-cover transition-transform duration-500 group-hover:scale-105"
@@ -349,10 +349,26 @@ export const StudentLibrary: React.FC<StudentLibraryProps> = ({
                       <span className="text-xs font-bold tracking-tight">Study Document</span>
                     </div>
                   ) : (
-                    <div className="flex items-center justify-center w-full h-full bg-slate-900 group-hover:bg-slate-800 transition-colors">
-                      <div className="w-12 h-12 rounded-2xl bg-sky-500/20 border border-sky-400/30 flex items-center justify-center text-sky-400 group-hover:scale-110 transition-transform">
+                    <div className="relative w-full h-full bg-slate-900 group-hover:bg-slate-800 transition-colors flex items-center justify-center">
+                      <img
+                        src={item.posterUrl || `/api/videos/${item.id}/poster`}
+                        alt={item.title}
+                        loading="lazy"
+                        onError={(e) => {
+                          // Hide broken poster and show play button fallback
+                          (e.target as HTMLElement).style.display = 'none';
+                        }}
+                        className="absolute inset-0 w-full h-full object-cover opacity-80 group-hover:scale-105 transition-transform duration-500"
+                      />
+                      <div className="relative z-10 w-12 h-12 rounded-2xl bg-sky-500/80 backdrop-blur-md border border-sky-400/40 flex items-center justify-center text-white shadow-lg group-hover:scale-110 transition-transform">
                         <Play className="w-6 h-6 ml-0.5 fill-current" />
                       </div>
+                      {item.processingStatus === 'processing' && (
+                        <div className="absolute bottom-2 right-2 px-2 py-0.5 rounded bg-black/70 backdrop-blur-md text-[10px] text-amber-300 font-medium flex items-center gap-1 z-20">
+                          <Loader2 className="w-3 h-3 animate-spin" />
+                          <span>Processing...</span>
+                        </div>
+                      )}
                     </div>
                   )}
 

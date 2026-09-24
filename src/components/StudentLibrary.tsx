@@ -350,16 +350,17 @@ export const StudentLibrary: React.FC<StudentLibraryProps> = ({
                     </div>
                   ) : (
                     <div className="relative w-full h-full bg-slate-900 group-hover:bg-slate-800 transition-colors flex items-center justify-center">
-                      <img
-                        src={item.posterUrl || `/api/videos/${item.id}/poster`}
-                        alt={item.title}
-                        loading="lazy"
-                        onError={(e) => {
-                          // Hide broken poster and show play button fallback
-                          (e.target as HTMLElement).style.display = 'none';
-                        }}
-                        className="absolute inset-0 w-full h-full object-cover opacity-80 group-hover:scale-105 transition-transform duration-500"
-                      />
+                      {item.posterUrl && (
+                        <img
+                          src={item.posterUrl}
+                          alt={item.title}
+                          loading="lazy"
+                          onError={(e) => {
+                            (e.target as HTMLElement).style.display = 'none';
+                          }}
+                          className="absolute inset-0 w-full h-full object-cover opacity-80 group-hover:scale-105 transition-transform duration-500"
+                        />
+                      )}
                       <div className="relative z-10 w-12 h-12 rounded-2xl bg-sky-500/80 backdrop-blur-md border border-sky-400/40 flex items-center justify-center text-white shadow-lg group-hover:scale-110 transition-transform">
                         <Play className="w-6 h-6 ml-0.5 fill-current" />
                       </div>

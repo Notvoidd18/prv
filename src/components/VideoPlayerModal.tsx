@@ -104,6 +104,9 @@ export const VideoPlayerModal: React.FC<VideoPlayerModalProps> = ({
   const [isDeleting, setIsDeleting] = useState(false);
   const [deleteError, setDeleteError] = useState<string | null>(null);
 
+  // Progressive buffer loading state
+  const [bufferedEnd, setBufferedEnd] = useState(0);
+
   const videoRef = useRef<HTMLVideoElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const controlsTimeoutRef = useRef<any>(null);
@@ -300,10 +303,25 @@ export const VideoPlayerModal: React.FC<VideoPlayerModalProps> = ({
     setCurrentTime(target);
   };
 
+  const handleProgress = () => {
+    if (videoRef.current && videoRef.current.buffered.length > 0) {
+      const buff = videoRef.current.buffered;
+      const curTime = videoRef.current.currentTime;
+      for (let i = 0; i < buff.length; i++) {
+        if (buff.start(i) <= curTime && curTime <= buff.end(i)) {
+          setBufferedEnd(buff.end(i));
+          return;
+        }
+      }
+      setBufferedEnd(buff.end(buff.length - 1));
+    }
+  };
+
   const handleTimeUpdate = () => {
     if (videoRef.current) {
       setCurrentTime(videoRef.current.currentTime);
       setDuration(videoRef.current.duration || 0);
+      handleProgress();
     }
   };
 
@@ -709,12 +727,21 @@ export const VideoPlayerModal: React.FC<VideoPlayerModalProps> = ({
             <>
               <video
                 ref={videoRef}
-                preload="metadata"
+                preload="auto"
                 autoPlay
                 playsInline
                 controlsList="nodownload nofullscreen"
                 onTimeUpdate={handleTimeUpdate}
+                onProgress={handleProgress}
                 onLoadedMetadata={handleLoadedMetadata}
+                onLoadedData={() => {
+                  setIsBuffering(false);
+                  videoRef.current?.play().catch(() => {});
+                }}
+                onCanPlay={() => {
+                  setIsBuffering(false);
+                  videoRef.current?.play().catch(() => {});
+                }}
                 onWaiting={() => setIsBuffering(true)}
                 onPlaying={() => {
                   setIsBuffering(false);
@@ -783,14 +810,34 @@ export const VideoPlayerModal: React.FC<VideoPlayerModalProps> = ({
                   controlsVisible ? 'opacity-100' : 'opacity-0 pointer-events-none'
                 }`}
               >
-                <input
-                  type="range"
-                  min={0}
-                  max={duration || 100}
-                  value={currentTime}
-                  onChange={handleSeek}
-                  className="w-full h-1 bg-white/20 rounded appearance-none cursor-pointer accent-white hover:h-2 transition-all"
-                />
+                {/* Dual-Layer Real-Time Buffer + Playback Progress Track */}
+                <div className="relative w-full h-1.5 hover:h-2.5 bg-white/20 rounded-full transition-all flex items-center group cursor-pointer">
+                  {/* Background Buffer (Loading while Playing) */}
+                  <div
+                    className="absolute top-0 bottom-0 left-0 bg-white/40 rounded-full transition-all duration-200 pointer-events-none"
+                    style={{
+                      width: `${Math.min(100, (bufferedEnd / (duration || 1)) * 100)}%`,
+                    }}
+                  />
+                  {/* Active Playback Position Fill */}
+                  <div
+                    className="absolute top-0 bottom-0 left-0 bg-sky-500 rounded-full pointer-events-none shadow-sm"
+                    style={{
+                      width: `${Math.min(100, (currentTime / (duration || 1)) * 100)}%`,
+                    }}
+                  />
+                  {/* Seek input overlay for fluid scrub control */}
+                  <input
+                    type="range"
+                    min={0}
+                    max={duration || 100}
+                    step={0.1}
+                    value={currentTime}
+                    onChange={handleSeek}
+                    className="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-10"
+                    aria-label="Seek video position"
+                  />
+                </div>
 
                 <div className="flex items-center justify-between text-white text-xs">
                   <div className="flex items-center gap-3">

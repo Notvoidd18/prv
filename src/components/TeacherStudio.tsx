@@ -511,6 +511,24 @@ export const TeacherStudio: React.FC<TeacherStudioProps> = ({
                           : `${(lesson.size / (1024 * 1024)).toFixed(1)} MB`}
                       </span>
                     </div>
+
+                    {lesson.processingStatus === 'processing' && (
+                      <div className="mt-1.5 space-y-1 max-w-xs">
+                        <div className="flex items-center justify-between text-[9px]">
+                          <span className="text-sky-600 dark:text-sky-400 font-semibold flex items-center gap-1">
+                            <Loader2 className="w-2.5 h-2.5 animate-spin" />
+                            {lesson.processingStage || 'Optimizing stream...'}
+                          </span>
+                          <span className="font-mono text-slate-500 font-bold">{lesson.processingProgress ?? 15}%</span>
+                        </div>
+                        <div className="w-full bg-slate-200 dark:bg-slate-800 rounded-full h-1.5 overflow-hidden">
+                          <div
+                            className="bg-sky-500 h-full rounded-full transition-all duration-300"
+                            style={{ width: `${lesson.processingProgress ?? 15}%` }}
+                          />
+                        </div>
+                      </div>
+                    )}
                   </div>
                 </div>
 

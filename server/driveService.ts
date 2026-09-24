@@ -1,4 +1,6 @@
 import fs from 'fs';
+import { Readable } from 'stream';
+import { pipeline } from 'stream/promises';
 import { db, DriveTokens } from './db.js';
 
 export const CATEGORIES = ['Mathematics', 'Science', 'English', 'Other'] as const;
@@ -467,7 +469,7 @@ export class DriveService {
   }
 
   /**
-   * Streams a file from Google Drive, supporting HTTP Range requests.
+   * Streams a file from Google Drive, supporting HTTP Range requests and files of any size (>33MB).
    */
   async streamFile(
     fileId: string,
@@ -487,7 +489,8 @@ export class DriveService {
       headers['Range'] = rangeHeader;
     }
 
-    const fetchUrl = `${GOOGLE_DRIVE_API_BASE}/files/${fileId}?alt=media`;
+    // acknowledgeAbuse=true is mandatory for Google Drive files > 25-33MB to bypass virus scan interstitial
+    const fetchUrl = `${GOOGLE_DRIVE_API_BASE}/files/${fileId}?alt=media&acknowledgeAbuse=true&supportsAllDrives=true`;
     const res = await fetch(fetchUrl, { headers });
 
     if (!res.ok && res.status !== 206) {
@@ -519,6 +522,27 @@ export class DriveService {
       headers: responseHeaders,
       stream: res.body,
     };
+  }
+
+  /**
+   * Downloads a large file from Google Drive directly to disk with virus scan bypass.
+   */
+  async downloadFileToDisk(fileId: string, destPath: string): Promise<string> {
+    const accessToken = await this.getValidAccessToken();
+    const fetchUrl = `${GOOGLE_DRIVE_API_BASE}/files/${fileId}?alt=media&acknowledgeAbuse=true&supportsAllDrives=true`;
+    const res = await fetch(fetchUrl, {
+      headers: { Authorization: `Bearer ${accessToken}` },
+    });
+
+    if (!res.ok) {
+      const errText = await res.text();
+      throw new Error(`Failed to download from Drive (${res.status}): ${errText}`);
+    }
+
+    const fileStream = fs.createWriteStream(destPath);
+    const nodeStream = Readable.fromWeb(res.body as any);
+    await pipeline(nodeStream, fileStream);
+    return destPath;
   }
 
   /**

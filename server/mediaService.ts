@@ -41,7 +41,11 @@ export async function probeMedia(filePath: string): Promise<{ duration: number; 
   }
 }
 
-export function processVideoMedia(lessonId: string, inputFilePath: string): Promise<MediaMetadata> {
+export function processVideoMedia(
+  lessonId: string,
+  inputFilePath: string,
+  onProgress?: (progress: number, stage: string) => void
+): Promise<MediaMetadata> {
   // If this lesson is already being processed, return the active promise
   if (activeProcessingJobs.has(lessonId)) {
     return activeProcessingJobs.get(lessonId)!;
@@ -59,6 +63,8 @@ export function processVideoMedia(lessonId: string, inputFilePath: string): Prom
       fs.mkdirSync(hlsDir, { recursive: true });
     }
 
+    onProgress?.(10, 'Analyzing media and extracting HD poster...');
+
     const { duration, width, height } = await probeMedia(inputFilePath);
 
     // 1. Extract Poster at 1 second (or 0)
@@ -72,6 +78,8 @@ export function processVideoMedia(lessonId: string, inputFilePath: string): Prom
       }
     }
 
+    onProgress?.(25, 'Poster extracted. Preparing adaptive stream renditions...');
+
     // Determine allowed qualities strictly <= original source resolution
     const availableQualities: string[] = ['360p'];
     if (height >= 480) availableQualities.push('480p');
@@ -81,6 +89,7 @@ export function processVideoMedia(lessonId: string, inputFilePath: string): Prom
     // 2. Generate HLS Adaptive Streams with proper bandwidth tags
     try {
       // 360p (Baseline rendition)
+      onProgress?.(40, 'Transcoding 360p mobile stream...');
       const dir360 = path.join(hlsDir, '360p');
       if (!fs.existsSync(dir360)) fs.mkdirSync(dir360, { recursive: true });
       await execAsync(
@@ -92,6 +101,7 @@ export function processVideoMedia(lessonId: string, inputFilePath: string): Prom
 
       // 480p rendition
       if (height >= 480 && availableQualities.includes('480p')) {
+        onProgress?.(65, 'Encoding 480p standard stream...');
         const dir480 = path.join(hlsDir, '480p');
         if (!fs.existsSync(dir480)) fs.mkdirSync(dir480, { recursive: true });
         await execAsync(
@@ -102,6 +112,7 @@ export function processVideoMedia(lessonId: string, inputFilePath: string): Prom
 
       // 720p rendition
       if (height >= 720 && availableQualities.includes('720p')) {
+        onProgress?.(85, 'Encoding 720p HD stream...');
         const dir720 = path.join(hlsDir, '720p');
         if (!fs.existsSync(dir720)) fs.mkdirSync(dir720, { recursive: true });
         await execAsync(
@@ -112,6 +123,7 @@ export function processVideoMedia(lessonId: string, inputFilePath: string): Prom
 
       // 1080p rendition
       if (height >= 1080 && availableQualities.includes('1080p')) {
+        onProgress?.(92, 'Encoding 1080p Full HD stream...');
         const dir1080 = path.join(hlsDir, '1080p');
         if (!fs.existsSync(dir1080)) fs.mkdirSync(dir1080, { recursive: true });
         await execAsync(
@@ -120,8 +132,11 @@ export function processVideoMedia(lessonId: string, inputFilePath: string): Prom
         masterContent += `#EXT-X-STREAM-INF:BANDWIDTH=5128000,AVERAGE-BANDWIDTH=4800000,RESOLUTION=1920x1080,FRAME-RATE=30.000,CODECS="avc1.640028,mp4a.40.2"\n1080p/index.m3u8\n`;
       }
 
+      onProgress?.(96, 'Building adaptive master playlist...');
       const masterPath = path.join(hlsDir, 'master.m3u8');
       fs.writeFileSync(masterPath, masterContent, 'utf-8');
+
+      onProgress?.(100, 'Ready');
 
       return {
         duration,
@@ -133,6 +148,7 @@ export function processVideoMedia(lessonId: string, inputFilePath: string): Prom
       };
     } catch (err) {
       console.warn('HLS transcoding warning (falling back to range stream):', err);
+      onProgress?.(100, 'Ready');
       return {
         duration,
         width,
@@ -149,7 +165,11 @@ export function processVideoMedia(lessonId: string, inputFilePath: string): Prom
   return jobPromise;
 }
 
-export function processImageMedia(lessonId: string, inputFilePath: string): Promise<MediaMetadata> {
+export function processImageMedia(
+  lessonId: string,
+  inputFilePath: string,
+  onProgress?: (progress: number, stage: string) => void
+): Promise<MediaMetadata> {
   if (activeProcessingJobs.has(lessonId)) {
     return activeProcessingJobs.get(lessonId)!;
   }
@@ -159,6 +179,8 @@ export function processImageMedia(lessonId: string, inputFilePath: string): Prom
     if (!fs.existsSync(itemDir)) {
       fs.mkdirSync(itemDir, { recursive: true });
     }
+
+    onProgress?.(30, 'Generating thumbnail variants...');
 
     const thumbPath = path.join(itemDir, 'thumb.jpg');
     const mediumPath = path.join(itemDir, 'medium.jpg');
@@ -170,7 +192,10 @@ export function processImageMedia(lessonId: string, inputFilePath: string): Prom
       console.warn('Image variant generation warning:', err);
     }
 
+    onProgress?.(90, 'Probing image dimensions...');
     const { width, height } = await probeMedia(inputFilePath);
+
+    onProgress?.(100, 'Ready');
 
     return {
       width,

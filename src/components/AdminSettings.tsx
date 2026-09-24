@@ -422,7 +422,7 @@ export const AdminSettings: React.FC<AdminSettingsProps> = ({
                   </span>
                 </div>
                 <p className="text-xs text-slate-500 dark:text-slate-400">
-                  Connected Account: <span className="font-mono text-sky-700 dark:text-sky-300 font-semibold">{storageData?.quota?.accountEmail || config?.account?.email || 'naveen.an.18.an@gmail.com'}</span>
+                  Connected Account: <span className="font-mono text-sky-700 dark:text-sky-300 font-semibold">{storageData?.quota?.accountEmail || config?.account?.email || 'Connected Administrator'}</span>
                 </p>
               </div>
 

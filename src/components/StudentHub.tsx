@@ -94,7 +94,7 @@ export const StudentHub: React.FC<StudentHubProps> = ({
   const fileInputRef = useRef<HTMLInputElement>(null);
   const nativeCameraInputRef = useRef<HTMLInputElement>(null);
 
-  const isSuperAdmin = currentUser?.email?.toLowerCase() === 'naveen.an.18.an@gmail.com';
+  const isSuperAdmin = currentUser?.role === 'admin';
   const isAdmin = currentUser?.role === 'admin' || isSuperAdmin;
   const isTeacherOrAdmin = currentUser?.role === 'teacher' || isAdmin;
 

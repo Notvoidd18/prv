@@ -33,6 +33,8 @@ export interface VideoRecord {
   masterPlaylistUrl?: string;
   availableQualities?: string[];
   processingStatus?: 'processing' | 'ready' | 'failed';
+  processingProgress?: number;
+  processingStage?: string;
   createdAt: string;
   uploader: string;
   uploaderEmail?: string;

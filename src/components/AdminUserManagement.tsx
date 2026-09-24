@@ -186,7 +186,7 @@ export const AdminUserManagement: React.FC<AdminUserManagementProps> = ({ curren
               <tbody className="divide-y divide-sky-400/10">
                 {users.map((u) => {
                   const isSelf = u.id === currentUser?.id;
-                  const isSuperAdmin = u.email.toLowerCase() === 'naveen.an.18.an@gmail.com';
+                  const isSuperAdmin = u.role === 'admin';
                   return (
                     <tr key={u.id} className="hover:bg-sky-500/5 transition-colors">
                       <td className="py-3 px-4">

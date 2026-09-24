@@ -232,6 +232,7 @@ export default function App() {
             }}
             onDeleteLesson={handleDeleteLesson}
             onOpenSettings={() => setIsSettingsOpen(true)}
+            onRefreshVideos={fetchLessons}
           />
         )}
 

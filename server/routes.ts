@@ -541,10 +541,20 @@ router.post(
         (isWordDoc ? '.docx' : isPdf ? '.pdf' : isPhoto ? '.jpg' : '.mp4');
       const safeDriveFileName = `${Date.now()}_${crypto.randomUUID().substring(0, 8)}${sanitizedExt}`;
 
+      // Always save a local copy to data/local_videos for instant 0ms Range-request streaming
+      const localDir = path.resolve(process.cwd(), 'data', 'local_videos');
+      if (!fs.existsSync(localDir)) {
+        fs.mkdirSync(localDir, { recursive: true });
+      }
+      const destPath = path.join(localDir, safeDriveFileName);
+      fs.copyFileSync(file.path, destPath);
+      localFilePath = destPath;
+
+      // Also upload to Google Drive for 2 TB permanent cloud backup if connected
       if (tokens && (tokens.refresh_token || tokens.access_token)) {
         try {
           const driveResult = await driveService.uploadFileFromDisk({
-            filePath: file.path,
+            filePath: destPath,
             fileName: safeDriveFileName,
             mimeType: file.mimetype,
             category: validCategory,
@@ -552,18 +562,8 @@ router.post(
           });
           driveFileId = driveResult.fileId;
         } catch (e) {
-          console.warn('Google Drive upload failed, falling back to local storage:', e);
+          console.warn('Google Drive upload warning (local storage is fully active):', e);
         }
-      }
-
-      if (!driveFileId) {
-        const localDir = path.resolve(process.cwd(), 'data', 'local_videos');
-        if (!fs.existsSync(localDir)) {
-          fs.mkdirSync(localDir, { recursive: true });
-        }
-        const destPath = path.join(localDir, safeDriveFileName);
-        fs.copyFileSync(file.path, destPath);
-        localFilePath = destPath;
       }
 
       const lessonRecord: VideoRecord = {
@@ -579,6 +579,8 @@ router.post(
         mimeType: file.mimetype,
         size: file.size,
         processingStatus: 'processing',
+        processingProgress: 5,
+        processingStage: 'Initializing optimization...',
         createdAt: new Date().toISOString(),
         uploader: user.name || user.email.split('@')[0],
         uploaderEmail: user.email,
@@ -590,7 +592,14 @@ router.post(
       const processingFilePath = localFilePath || file.path;
       if (processingFilePath && fs.existsSync(processingFilePath)) {
         if (lessonType === 'video') {
-          processVideoMedia(lessonRecord.id, processingFilePath)
+          processVideoMedia(lessonRecord.id, processingFilePath, (progress, stage) => {
+            const current = db.getVideos().find((v) => v.id === lessonRecord.id);
+            if (current) {
+              current.processingProgress = progress;
+              current.processingStage = stage;
+              db.saveVideo(current);
+            }
+          })
             .then((meta) => {
               const current = db.getVideos().find((v) => v.id === lessonRecord.id);
               if (current) {
@@ -599,6 +608,8 @@ router.post(
                 current.masterPlaylistUrl = meta.masterPlaylistPath ? `/api/videos/${current.id}/hls/master.m3u8` : undefined;
                 current.availableQualities = meta.availableQualities;
                 current.processingStatus = 'ready';
+                current.processingProgress = 100;
+                current.processingStage = 'Ready for playback';
                 db.saveVideo(current);
               }
             })
@@ -607,15 +618,26 @@ router.post(
               const current = db.getVideos().find((v) => v.id === lessonRecord.id);
               if (current) {
                 current.processingStatus = 'ready';
+                current.processingProgress = 100;
+                current.processingStage = 'Standard stream ready';
                 db.saveVideo(current);
               }
             });
         } else if (lessonType === 'photo') {
-          processImageMedia(lessonRecord.id, processingFilePath)
+          processImageMedia(lessonRecord.id, processingFilePath, (progress, stage) => {
+            const current = db.getVideos().find((v) => v.id === lessonRecord.id);
+            if (current) {
+              current.processingProgress = progress;
+              current.processingStage = stage;
+              db.saveVideo(current);
+            }
+          })
             .then(() => {
               const current = db.getVideos().find((v) => v.id === lessonRecord.id);
               if (current) {
                 current.processingStatus = 'ready';
+                current.processingProgress = 100;
+                current.processingStage = 'Ready';
                 db.saveVideo(current);
               }
             })
@@ -623,15 +645,20 @@ router.post(
               const current = db.getVideos().find((v) => v.id === lessonRecord.id);
               if (current) {
                 current.processingStatus = 'ready';
+                current.processingProgress = 100;
                 db.saveVideo(current);
               }
             });
         } else {
           lessonRecord.processingStatus = 'ready';
+          lessonRecord.processingProgress = 100;
+          lessonRecord.processingStage = 'Ready';
           db.saveVideo(lessonRecord);
         }
       } else {
         lessonRecord.processingStatus = 'ready';
+        lessonRecord.processingProgress = 100;
+        lessonRecord.processingStage = 'Ready';
         db.saveVideo(lessonRecord);
       }
 
@@ -657,6 +684,25 @@ router.post(
     }
   }
 );
+
+/**
+ * Get processing status and progress for a specific lesson
+ */
+router.get('/api/videos/:id/status', (req: Request, res: Response) => {
+  const { id } = req.params;
+  const lesson = db.getVideos().find((v) => v.id === id);
+  if (!lesson) {
+    res.status(404).json({ error: 'Lesson not found' });
+    return;
+  }
+  res.json({
+    id: lesson.id,
+    processingStatus: lesson.processingStatus || 'ready',
+    processingProgress: lesson.processingProgress ?? 100,
+    processingStage: lesson.processingStage || (lesson.processingStatus === 'ready' ? 'Ready' : 'Optimizing...'),
+    availableQualities: lesson.availableQualities || [],
+  });
+});
 
 /**
  * Serve video poster image
@@ -836,9 +882,18 @@ router.get('/api/videos/:id/stream', async (req: Request, res: Response) => {
       return;
     }
 
-    // If local file path exists and file exists, stream locally (Render fallback without Google Drive)
-    if (lesson.localFilePath && fs.existsSync(lesson.localFilePath)) {
-      const stat = fs.statSync(lesson.localFilePath);
+    // If local file path exists and file exists, stream locally with instant 0ms range seeking
+    const localVideoDir = path.resolve(process.cwd(), 'data', 'local_videos');
+    let effectiveLocalPath = lesson.localFilePath;
+    if (!effectiveLocalPath || !fs.existsSync(effectiveLocalPath)) {
+      const fallbackLocal = path.join(localVideoDir, lesson.fileName);
+      if (fs.existsSync(fallbackLocal)) {
+        effectiveLocalPath = fallbackLocal;
+      }
+    }
+
+    if (effectiveLocalPath && fs.existsSync(effectiveLocalPath)) {
+      const stat = fs.statSync(effectiveLocalPath);
       const fileSize = stat.size;
       const range = req.headers.range;
 
@@ -853,7 +908,7 @@ router.get('/api/videos/:id/stream', async (req: Request, res: Response) => {
         const start = parseInt(parts[0], 10);
         const end = parts[1] ? parseInt(parts[1], 10) : fileSize - 1;
         const chunksize = (end - start) + 1;
-        const fileStream = fs.createReadStream(lesson.localFilePath, { start, end });
+        const fileStream = fs.createReadStream(effectiveLocalPath, { start, end });
         res.writeHead(206, {
           'Content-Range': `bytes ${start}-${end}/${fileSize}`,
           'Content-Length': chunksize,
@@ -863,7 +918,7 @@ router.get('/api/videos/:id/stream', async (req: Request, res: Response) => {
         res.writeHead(200, {
           'Content-Length': fileSize,
         });
-        fs.createReadStream(lesson.localFilePath).pipe(res);
+        fs.createReadStream(effectiveLocalPath).pipe(res);
       }
       return;
     }
@@ -871,6 +926,46 @@ router.get('/api/videos/:id/stream', async (req: Request, res: Response) => {
     if (!lesson.driveFileId) {
       res.status(404).json({ error: 'Lesson file source not found.' });
       return;
+    }
+
+    // Trigger local background caching from Drive so all subsequent range seeks become instant
+    const cacheDestPath = path.join(localVideoDir, `${lesson.id}_${lesson.fileName}`);
+    if (!fs.existsSync(cacheDestPath)) {
+      driveService
+        .downloadFileToDisk(lesson.driveFileId, cacheDestPath)
+        .then((savedPath) => {
+          const current = db.getVideos().find((v) => v.id === lesson.id);
+          if (current) {
+            current.localFilePath = savedPath;
+            db.saveVideo(current);
+            // Also trigger background HLS processing if not already ready
+            if (current.processingStatus !== 'ready') {
+              processVideoMedia(current.id, savedPath, (progress, stage) => {
+                const live = db.getVideos().find((v) => v.id === current.id);
+                if (live) {
+                  live.processingProgress = progress;
+                  live.processingStage = stage;
+                  db.saveVideo(live);
+                }
+              }).then((meta) => {
+                const live = db.getVideos().find((v) => v.id === current.id);
+                if (live) {
+                  live.duration = meta.duration;
+                  live.posterUrl = meta.posterPath ? `/api/videos/${live.id}/poster` : undefined;
+                  live.masterPlaylistUrl = meta.masterPlaylistPath ? `/api/videos/${live.id}/hls/master.m3u8` : undefined;
+                  live.availableQualities = meta.availableQualities;
+                  live.processingStatus = 'ready';
+                  live.processingProgress = 100;
+                  live.processingStage = 'Ready for playback';
+                  db.saveVideo(live);
+                }
+              }).catch(() => {});
+            }
+          }
+        })
+        .catch((dlErr) => {
+          console.warn('Background caching from Drive warning:', dlErr);
+        });
     }
 
     const rangeHeader = req.headers.range;

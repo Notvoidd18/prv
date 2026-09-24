@@ -30,6 +30,7 @@ interface StudentLibraryProps {
   onNavigateToUpload: () => void;
   onDeleteLesson?: (id: string) => void;
   onOpenSettings?: () => void;
+  onRefreshVideos?: () => void;
 }
 
 export const StudentLibrary: React.FC<StudentLibraryProps> = ({
@@ -39,6 +40,7 @@ export const StudentLibrary: React.FC<StudentLibraryProps> = ({
   onNavigateToUpload,
   onDeleteLesson,
   onOpenSettings,
+  onRefreshVideos,
 }) => {
   const [selectedCategory, setSelectedCategory] = useState<string>('All');
   const [selectedType, setSelectedType] = useState<'All' | 'video' | 'photo' | 'pdf' | 'doc' | 'homework'>('All');
@@ -93,6 +95,18 @@ export const StudentLibrary: React.FC<StudentLibraryProps> = ({
       })
       .catch(() => {});
   }, []);
+
+  // Live polling for processing items so progress bar updates smoothly in real-time
+  React.useEffect(() => {
+    const isAnyProcessing = lessons.some((l) => l.processingStatus === 'processing');
+    if (!isAnyProcessing) return;
+
+    const pollTimer = setInterval(() => {
+      onRefreshVideos?.();
+    }, 2500);
+
+    return () => clearInterval(pollTimer);
+  }, [lessons, onRefreshVideos]);
 
   const categories = ['All', ...subjectsList];
   const isSuperAdmin = currentUser?.email?.toLowerCase() === 'naveen.an.18.an@gmail.com';
@@ -361,13 +375,41 @@ export const StudentLibrary: React.FC<StudentLibraryProps> = ({
                           className="absolute inset-0 w-full h-full object-cover opacity-80 group-hover:scale-105 transition-transform duration-500"
                         />
                       )}
-                      <div className="relative z-10 w-12 h-12 rounded-2xl bg-sky-500/80 backdrop-blur-md border border-sky-400/40 flex items-center justify-center text-white shadow-lg group-hover:scale-110 transition-transform">
-                        <Play className="w-6 h-6 ml-0.5 fill-current" />
-                      </div>
-                      {item.processingStatus === 'processing' && (
-                        <div className="absolute bottom-2 right-2 px-2 py-0.5 rounded bg-black/70 backdrop-blur-md text-[10px] text-amber-300 font-medium flex items-center gap-1 z-20">
-                          <Loader2 className="w-3 h-3 animate-spin" />
-                          <span>Processing...</span>
+                      
+                      {item.processingStatus === 'processing' ? (
+                        /* Informative Processing Progress Bar Overlay */
+                        <div className="absolute inset-0 bg-slate-950/85 backdrop-blur-sm flex flex-col items-center justify-center p-3.5 z-20 text-center select-none">
+                          <div className="w-8 h-8 rounded-xl bg-sky-500/20 border border-sky-400/30 flex items-center justify-center text-sky-400 mb-2 shadow-md">
+                            <Loader2 className="w-4 h-4 animate-spin text-sky-400" />
+                          </div>
+
+                          <div className="text-[11px] font-bold text-white tracking-tight line-clamp-1 mb-1.5 px-1">
+                            {item.processingStage || 'Optimizing video for ultra-fast streaming...'}
+                          </div>
+
+                          {/* Progress Bar Track */}
+                          <div className="w-full max-w-[190px] bg-white/15 rounded-full h-2 overflow-hidden border border-white/10 mb-1.5 shadow-inner">
+                            <div
+                              className="h-full rounded-full bg-gradient-to-r from-sky-400 via-indigo-400 to-purple-400 transition-all duration-500 ease-out"
+                              style={{ width: `${Math.max(8, item.processingProgress ?? 15)}%` }}
+                            />
+                          </div>
+
+                          {/* Progress Stats */}
+                          <div className="flex items-center justify-between w-full max-w-[190px] text-[10px] font-mono text-slate-300 px-0.5">
+                            <span className="font-bold text-sky-300">{item.processingProgress ?? 15}%</span>
+                            <span className="text-slate-400 text-[9px]">
+                              ~{Math.max(3, Math.round((100 - (item.processingProgress ?? 15)) * 0.35))}s left
+                            </span>
+                          </div>
+
+                          <span className="mt-1 text-[9px] text-sky-300/70 font-medium">
+                            Standard preview ready to play
+                          </span>
+                        </div>
+                      ) : (
+                        <div className="relative z-10 w-12 h-12 rounded-2xl bg-sky-500/80 backdrop-blur-md border border-sky-400/40 flex items-center justify-center text-white shadow-lg group-hover:scale-110 transition-transform">
+                          <Play className="w-6 h-6 ml-0.5 fill-current" />
                         </div>
                       )}
                     </div>

@@ -96,14 +96,13 @@ export default function App() {
   }, []);
 
   const fetchLessons = useCallback(async () => {
-    if (!currentUser) return;
     try {
       setLoadingLessons(true);
-      const res = await fetch('/api/videos', {
-        headers: {
-          'x-user-email': currentUser.email,
-        },
-      });
+      const headers: Record<string, string> = {};
+      if (currentUser?.email) {
+        headers['x-user-email'] = currentUser.email;
+      }
+      const res = await fetch('/api/videos', { headers });
       if (res.ok) {
         const data = await res.json();
         setLessons(data.videos || []);
@@ -120,11 +119,7 @@ export default function App() {
   }, [fetchConfig]);
 
   useEffect(() => {
-    if (currentUser) {
-      fetchLessons();
-    } else {
-      setLessons([]);
-    }
+    fetchLessons();
   }, [currentUser, fetchLessons]);
 
   const handleDeleteLesson = async (id: string) => {
@@ -221,46 +216,50 @@ export default function App() {
 
       {/* Main Content Area */}
       <main className="relative z-10 flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 pt-8">
-        {authLoading ? (
-          <div className="min-h-[50vh] flex flex-col items-center justify-center space-y-3 text-slate-400 text-xs">
-            <div className="w-8 h-8 border-2 border-blue-600 border-t-transparent rounded-full animate-spin" />
-            <span>Verifying Google account authorization...</span>
-          </div>
-        ) : !currentUser ? (
-          /* USER NOT SIGNED IN: GOOGLE SIGN-IN GATEWAY */
+        {/* Student Library / Courses / Preview (Publicly accessible) */}
+        {currentTab === 'student' && (
+          <StudentLibrary
+            lessons={lessons}
+            currentUser={currentUser}
+            onSelectLesson={(lesson) => setSelectedItem(lesson)}
+            onNavigateToUpload={() => {
+              if (!currentUser) {
+                showToast('Please sign in with Google to upload lessons.', 'info');
+                setCurrentTab('teacher');
+              } else {
+                setCurrentTab('teacher');
+              }
+            }}
+            onDeleteLesson={handleDeleteLesson}
+            onOpenSettings={() => setIsSettingsOpen(true)}
+          />
+        )}
+
+        {/* Homework Hub (Publicly accessible) */}
+        {currentTab === 'homework' && (
+          <StudentHub
+            currentUser={currentUser}
+            onOpenPreview={(hw) =>
+              setSelectedItem({
+                ...hw,
+                isHomework: true,
+                uploader: hw.studentName,
+                uploaderEmail: hw.studentEmail,
+              } as PreviewItem)
+            }
+            onNavigateToLibrary={() => setCurrentTab('student')}
+          />
+        )}
+
+        {/* Live Classes (Publicly accessible) */}
+        {currentTab === 'live' && <LiveClassesUpcoming />}
+
+        {/* Teacher Studio & Admin Settings (Require Sign In) */}
+        {(currentTab === 'teacher' || currentTab === 'admin') && !currentUser ? (
           <AuthGateway onSignInSuccess={(user) => setCurrentUser(user)} />
         ) : (
-          /* USER SIGNED IN: RENDER SELECTED TAB */
           <>
-            {currentTab === 'student' && (
-              <StudentLibrary
-                lessons={lessons}
-                currentUser={currentUser}
-                onSelectLesson={(lesson) => setSelectedItem(lesson)}
-                onNavigateToUpload={() => setCurrentTab('teacher')}
-                onDeleteLesson={handleDeleteLesson}
-                onOpenSettings={() => setIsSettingsOpen(true)}
-              />
-            )}
-
-            {currentTab === 'homework' && (
-              <StudentHub
-                currentUser={currentUser}
-                onOpenPreview={(hw) =>
-                  setSelectedItem({
-                    ...hw,
-                    isHomework: true,
-                    uploader: hw.studentName,
-                    uploaderEmail: hw.studentEmail,
-                  } as PreviewItem)
-                }
-                onNavigateToLibrary={() => setCurrentTab('student')}
-              />
-            )}
-
-            {currentTab === 'live' && <LiveClassesUpcoming />}
-
-            {currentTab === 'teacher' && (
+            {currentTab === 'teacher' && currentUser && (
               <TeacherStudio
                 config={config}
                 currentUser={currentUser}
@@ -281,7 +280,7 @@ export default function App() {
               />
             )}
 
-            {currentTab === 'admin' && (
+            {currentTab === 'admin' && currentUser && (
               (currentUser.role === 'admin' || currentUser.email?.toLowerCase() === 'naveen.an.18.an@gmail.com') ? (
                 <AdminSettings
                   config={config}

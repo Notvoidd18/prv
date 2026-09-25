@@ -12,6 +12,13 @@ import { processVideoMedia, processImageMedia } from './mediaService.js';
 
 export const router = express.Router();
 
+/**
+ * Health check endpoint for external keep-alive pings (UptimeRobot, GitHub Actions, cron)
+ */
+router.get('/api/health', (_req: Request, res: Response) => {
+  res.status(200).json({ status: 'ok', uptime: process.uptime(), timestamp: new Date().toISOString() });
+});
+
 // Allowed file types: Videos, Lesson Photos, and PDF / Document Notes
 const ALLOWED_MIME_TYPES = [
   'video/mp4',

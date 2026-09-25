@@ -63,11 +63,11 @@ export function processVideoMedia(
       fs.mkdirSync(hlsDir, { recursive: true });
     }
 
-    onProgress?.(10, 'Analyzing media and extracting HD poster...');
+    onProgress?.(15, 'Extracting instant poster...');
 
     const { duration, width, height } = await probeMedia(inputFilePath);
 
-    // 1. Extract Poster at 1 second (or 0)
+    // 1. Fast poster extraction
     try {
       await execAsync(`ffmpeg -y -ss 00:00:01 -i "${inputFilePath}" -vframes 1 -q:v 3 "${posterPath}"`);
     } catch (e) {
@@ -78,36 +78,35 @@ export function processVideoMedia(
       }
     }
 
-    onProgress?.(25, 'Poster extracted. Preparing adaptive stream renditions...');
+    onProgress?.(30, 'Preparing Google-speed adaptive HLS renditions...');
 
-    // Determine allowed qualities strictly <= original source resolution
     const availableQualities: string[] = ['360p'];
     if (height >= 480) availableQualities.push('480p');
     if (height >= 720) availableQualities.push('720p');
     if (height >= 1080) availableQualities.push('1080p');
 
-    // 2. Generate HLS Adaptive Streams with proper bandwidth tags
+    // 2. Generate HLS Adaptive Streams with 3-second segments for instant start & seamless quality switching
     try {
-      // 360p (Baseline rendition)
-      onProgress?.(40, 'Transcoding 360p mobile stream...');
+      // 360p (Ultra-fast baseline rendition)
+      onProgress?.(50, 'Transcoding 360p stream...');
       const dir360 = path.join(hlsDir, '360p');
       if (!fs.existsSync(dir360)) fs.mkdirSync(dir360, { recursive: true });
       await execAsync(
-        `ffmpeg -y -i "${inputFilePath}" -vf "scale=636:360:force_original_aspect_ratio=decrease,pad=636:360:(ow-iw)/2:(oh-ih)/2" -c:v libx264 -b:v 800k -maxrate 900k -bufsize 1200k -preset veryfast -c:a aac -b:a 96k -hls_time 6 -hls_list_size 0 -hls_segment_filename "${dir360}/seg_%03d.ts" "${dir360}/index.m3u8"`
+        `ffmpeg -y -i "${inputFilePath}" -vf "scale=636:360:force_original_aspect_ratio=decrease,pad=636:360:(ow-iw)/2:(oh-ih)/2" -c:v libx264 -b:v 700k -maxrate 850k -bufsize 1000k -preset ultrafast -tune fastdecode -g 30 -keyint_min 30 -sc_threshold 0 -c:a aac -b:a 96k -hls_time 3 -hls_list_size 0 -hls_flags independent_segments -hls_segment_filename "${dir360}/seg_%03d.ts" "${dir360}/index.m3u8"`
       );
 
       let masterContent = `#EXTM3U\n#EXT-X-VERSION:3\n`;
-      masterContent += `#EXT-X-STREAM-INF:BANDWIDTH=896000,AVERAGE-BANDWIDTH=800000,RESOLUTION=636x360,FRAME-RATE=30.000,CODECS="avc1.4d401f,mp4a.40.2"\n360p/index.m3u8\n`;
+      masterContent += `#EXT-X-STREAM-INF:BANDWIDTH=796000,AVERAGE-BANDWIDTH=700000,RESOLUTION=636x360,FRAME-RATE=30.000,CODECS="avc1.4d401f,mp4a.40.2"\n360p/index.m3u8\n`;
 
       // 480p rendition
       if (height >= 480 && availableQualities.includes('480p')) {
-        onProgress?.(65, 'Encoding 480p standard stream...');
+        onProgress?.(70, 'Encoding 480p stream...');
         const dir480 = path.join(hlsDir, '480p');
         if (!fs.existsSync(dir480)) fs.mkdirSync(dir480, { recursive: true });
         await execAsync(
-          `ffmpeg -y -i "${inputFilePath}" -vf "scale=854:480:force_original_aspect_ratio=decrease,pad=854:480:(ow-iw)/2:(oh-ih)/2" -c:v libx264 -b:v 1400k -maxrate 1600k -bufsize 2100k -preset veryfast -c:a aac -b:a 128k -hls_time 6 -hls_list_size 0 -hls_segment_filename "${dir480}/seg_%03d.ts" "${dir480}/index.m3u8"`
+          `ffmpeg -y -i "${inputFilePath}" -vf "scale=854:480:force_original_aspect_ratio=decrease,pad=854:480:(ow-iw)/2:(oh-ih)/2" -c:v libx264 -b:v 1200k -maxrate 1400k -bufsize 1800k -preset ultrafast -tune fastdecode -g 30 -keyint_min 30 -sc_threshold 0 -c:a aac -b:a 128k -hls_time 3 -hls_list_size 0 -hls_flags independent_segments -hls_segment_filename "${dir480}/seg_%03d.ts" "${dir480}/index.m3u8"`
         );
-        masterContent += `#EXT-X-STREAM-INF:BANDWIDTH=1528000,AVERAGE-BANDWIDTH=1400000,RESOLUTION=854x480,FRAME-RATE=30.000,CODECS="avc1.4d401f,mp4a.40.2"\n480p/index.m3u8\n`;
+        masterContent += `#EXT-X-STREAM-INF:BANDWIDTH=1328000,AVERAGE-BANDWIDTH=1200000,RESOLUTION=854x480,FRAME-RATE=30.000,CODECS="avc1.4d401f,mp4a.40.2"\n480p/index.m3u8\n`;
       }
 
       // 720p rendition
@@ -116,23 +115,23 @@ export function processVideoMedia(
         const dir720 = path.join(hlsDir, '720p');
         if (!fs.existsSync(dir720)) fs.mkdirSync(dir720, { recursive: true });
         await execAsync(
-          `ffmpeg -y -i "${inputFilePath}" -vf "scale=1280:720:force_original_aspect_ratio=decrease,pad=1280:720:(ow-iw)/2:(oh-ih)/2" -c:v libx264 -b:v 2800k -maxrate 3100k -bufsize 4200k -preset veryfast -c:a aac -b:a 128k -hls_time 6 -hls_list_size 0 -hls_segment_filename "${dir720}/seg_%03d.ts" "${dir720}/index.m3u8"`
+          `ffmpeg -y -i "${inputFilePath}" -vf "scale=1280:720:force_original_aspect_ratio=decrease,pad=1280:720:(ow-iw)/2:(oh-ih)/2" -c:v libx264 -b:v 2500k -maxrate 2800k -bufsize 3500k -preset ultrafast -tune fastdecode -g 30 -keyint_min 30 -sc_threshold 0 -c:a aac -b:a 128k -hls_time 3 -hls_list_size 0 -hls_flags independent_segments -hls_segment_filename "${dir720}/seg_%03d.ts" "${dir720}/index.m3u8"`
         );
-        masterContent += `#EXT-X-STREAM-INF:BANDWIDTH=2928000,AVERAGE-BANDWIDTH=2800000,RESOLUTION=1280x720,FRAME-RATE=30.000,CODECS="avc1.4d401f,mp4a.40.2"\n720p/index.m3u8\n`;
+        masterContent += `#EXT-X-STREAM-INF:BANDWIDTH=2628000,AVERAGE-BANDWIDTH=2500000,RESOLUTION=1280x720,FRAME-RATE=30.000,CODECS="avc1.4d401f,mp4a.40.2"\n720p/index.m3u8\n`;
       }
 
       // 1080p rendition
       if (height >= 1080 && availableQualities.includes('1080p')) {
-        onProgress?.(92, 'Encoding 1080p Full HD stream...');
+        onProgress?.(94, 'Encoding 1080p Full HD stream...');
         const dir1080 = path.join(hlsDir, '1080p');
         if (!fs.existsSync(dir1080)) fs.mkdirSync(dir1080, { recursive: true });
         await execAsync(
-          `ffmpeg -y -i "${inputFilePath}" -vf "scale=1920:1080:force_original_aspect_ratio=decrease,pad=1920:1080:(ow-iw)/2:(oh-ih)/2" -c:v libx264 -b:v 5000k -maxrate 5500k -bufsize 7500k -preset veryfast -c:a aac -b:a 128k -hls_time 6 -hls_list_size 0 -hls_segment_filename "${dir1080}/seg_%03d.ts" "${dir1080}/index.m3u8"`
+          `ffmpeg -y -i "${inputFilePath}" -vf "scale=1920:1080:force_original_aspect_ratio=decrease,pad=1920:1080:(ow-iw)/2:(oh-ih)/2" -c:v libx264 -b:v 4500k -maxrate 5000k -bufsize 6500k -preset ultrafast -tune fastdecode -g 30 -keyint_min 30 -sc_threshold 0 -c:a aac -b:a 128k -hls_time 3 -hls_list_size 0 -hls_flags independent_segments -hls_segment_filename "${dir1080}/seg_%03d.ts" "${dir1080}/index.m3u8"`
         );
-        masterContent += `#EXT-X-STREAM-INF:BANDWIDTH=5128000,AVERAGE-BANDWIDTH=4800000,RESOLUTION=1920x1080,FRAME-RATE=30.000,CODECS="avc1.640028,mp4a.40.2"\n1080p/index.m3u8\n`;
+        masterContent += `#EXT-X-STREAM-INF:BANDWIDTH=4628000,AVERAGE-BANDWIDTH=4500000,RESOLUTION=1920x1080,FRAME-RATE=30.000,CODECS="avc1.640028,mp4a.40.2"\n1080p/index.m3u8\n`;
       }
 
-      onProgress?.(96, 'Building adaptive master playlist...');
+      onProgress?.(98, 'Finalizing master playlist...');
       const masterPath = path.join(hlsDir, 'master.m3u8');
       fs.writeFileSync(masterPath, masterContent, 'utf-8');
 

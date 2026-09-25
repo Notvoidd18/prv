@@ -5,21 +5,17 @@ import {
   Shield,
   LogOut,
   BookOpen,
-  PhoneCall,
   Moon,
   Sun,
   FileCheck2,
-  Bot,
-  Cloud,
-  ChevronRight,
   Settings,
 } from 'lucide-react';
 import { OAuthConfig, AppUser } from '../types.ts';
 import { signOutUser } from '../lib/firebaseAuth.ts';
 
 interface NavbarProps {
-  currentTab: 'student' | 'homework' | 'live' | 'teacher' | 'admin';
-  setCurrentTab: (tab: 'student' | 'homework' | 'live' | 'teacher' | 'admin') => void;
+  currentTab: 'student' | 'homework' | 'teacher' | 'admin';
+  setCurrentTab: (tab: 'student' | 'homework' | 'teacher' | 'admin') => void;
   config: OAuthConfig | null;
   currentUser: AppUser | null;
   darkMode: boolean;
@@ -65,10 +61,10 @@ export const Navbar: React.FC<NavbarProps> = ({
 
   return (
     <>
-      {/* Redesigned Floating Top iOS Glass Dynamic Island Bar (Desktop & Tablet) */}
+      {/* Floating Top Header Bar */}
       <header className="sticky top-0 z-40 transition-all pt-2.5 pb-2 px-3 sm:px-6 max-w-7xl mx-auto w-full">
         <div className="ios-nav-surface rounded-2xl sm:rounded-3xl border border-sky-400/20 dark:border-sky-400/20 shadow-[0_8px_30px_rgb(14,165,233,0.08)] dark:shadow-[0_8px_32px_rgba(0,0,0,0.5)] px-3.5 sm:px-5 py-2.5 flex items-center justify-between transition-all">
-          {/* Brand Logo - 10PrvDriver with Light Blue Glow */}
+          {/* Brand Logo - 10PrvDriver */}
           <div className="flex items-center gap-3">
             <button
               onClick={() => setCurrentTab('student')}
@@ -90,7 +86,7 @@ export const Navbar: React.FC<NavbarProps> = ({
             </button>
           </div>
 
-          {/* Desktop Navigation Tabs (Floating Light Blue Segmented Control) */}
+          {/* Desktop Navigation Tabs */}
           <nav className="hidden md:flex items-center gap-1 p-1 rounded-2xl bg-sky-500/8 dark:bg-sky-500/10 border border-sky-400/15 dark:border-sky-400/20">
             {/* Student Lessons Tab */}
             <button
@@ -102,7 +98,7 @@ export const Navbar: React.FC<NavbarProps> = ({
               }`}
             >
               <BookOpen className="w-3.5 h-3.5" />
-              <span>Lessons</span>
+              <span>Lessons & Library</span>
             </button>
 
             {/* Student Hub / Homework Tab */}
@@ -116,19 +112,6 @@ export const Navbar: React.FC<NavbarProps> = ({
             >
               <FileCheck2 className="w-3.5 h-3.5" />
               <span>Homework Hub</span>
-            </button>
-
-            {/* Live Classroom / Calls */}
-            <button
-              onClick={() => setCurrentTab('live')}
-              className={`px-3.5 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer flex items-center gap-1.5 ${
-                currentTab === 'live'
-                  ? 'bg-gradient-to-r from-sky-500 to-blue-600 text-white shadow-md shadow-sky-500/30 scale-[1.02]'
-                  : 'text-slate-600 dark:text-slate-300 hover:text-sky-600 dark:hover:text-sky-300 hover:bg-sky-500/10'
-              }`}
-            >
-              <PhoneCall className="w-3.5 h-3.5" />
-              <span>Online Classes</span>
             </button>
 
             {/* Teacher Studio (Gated for Teachers/Admins) */}
@@ -234,7 +217,7 @@ export const Navbar: React.FC<NavbarProps> = ({
         </div>
       </header>
 
-      {/* Redesigned Floating Bottom Navigation Dock for Phone Users (Thumb-Accessible, Light Blue Primary Active State) */}
+      {/* Floating Bottom Navigation Dock for Mobile Devices */}
       <div className="md:hidden fixed bottom-3 inset-x-3 z-50 max-w-md mx-auto pointer-events-auto">
         <nav className="ios-nav-surface rounded-2xl p-1.5 flex items-center justify-around shadow-[0_12px_36px_rgba(14,165,233,0.18)] dark:shadow-[0_12px_36px_rgba(0,0,0,0.7)] border border-sky-400/25 backdrop-blur-2xl">
           <button
@@ -259,18 +242,6 @@ export const Navbar: React.FC<NavbarProps> = ({
           >
             <FileCheck2 className="w-5 h-5" />
             <span className="text-[10px] mt-0.5 font-medium">Homework</span>
-          </button>
-
-          <button
-            onClick={() => setCurrentTab('live')}
-            className={`flex flex-col items-center justify-center py-2 px-3 rounded-xl transition-all min-w-[54px] ${
-              currentTab === 'live'
-                ? 'bg-gradient-to-b from-sky-500 to-blue-600 text-white shadow-md shadow-sky-500/35 font-bold scale-[1.03]'
-                : 'text-slate-500 hover:text-sky-600 dark:hover:text-sky-400'
-            }`}
-          >
-            <PhoneCall className="w-5 h-5" />
-            <span className="text-[10px] mt-0.5 font-medium">Live</span>
           </button>
 
           {isTeacherOrAdmin && (

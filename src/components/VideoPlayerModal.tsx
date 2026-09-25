@@ -13,6 +13,7 @@ import {
   Play,
   Pause,
   Volume2,
+  Volume1,
   VolumeX,
   Maximize2,
   Minimize2,
@@ -29,7 +30,15 @@ import {
   Copy,
   ChevronLeft,
   ChevronRight,
-  Download
+  Download,
+  Repeat,
+  Tv,
+  Bookmark,
+  Plus,
+  HelpCircle,
+  Clock,
+  FastForward,
+  Rewind,
 } from 'lucide-react';
 import { LessonRecord, HomeworkRecord, AppUser } from '../types.ts';
 
@@ -42,16 +51,27 @@ interface VideoPlayerModalProps {
   currentUser: AppUser | null;
   onClose: () => void;
   onDeleteLesson?: (id: string) => Promise<void> | void;
+  lessons?: PreviewItem[];
+  onSelectLesson?: (lesson: PreviewItem) => void;
 }
 
 export type QualityOption = 'Auto' | '1080p' | '720p' | '480p' | '360p';
-export type PlaybackSpeed = 0.5 | 0.75 | 1 | 1.25 | 1.5 | 2;
+export type PlaybackSpeed = 0.5 | 0.75 | 1 | 1.25 | 1.5 | 1.75 | 2;
+
+interface TimestampBookmark {
+  id: string;
+  time: number;
+  label: string;
+  createdAt: string;
+}
 
 export const VideoPlayerModal: React.FC<VideoPlayerModalProps> = ({
   lesson,
   currentUser,
   onClose,
   onDeleteLesson,
+  lessons = [],
+  onSelectLesson,
 }) => {
   if (!lesson) return null;
 
@@ -68,20 +88,40 @@ export const VideoPlayerModal: React.FC<VideoPlayerModalProps> = ({
   const [volume, setVolume] = useState(1);
   const [isMuted, setIsMuted] = useState(false);
   const [isFullscreen, setIsFullscreen] = useState(false);
+  const [isTheaterMode, setIsTheaterMode] = useState(false);
+  const [isLooping, setIsLooping] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
+  const [showSpeedMenu, setShowSpeedMenu] = useState(false);
+  const [showShortcutsModal, setShowShortcutsModal] = useState(false);
+  const [showNotesPanel, setShowNotesPanel] = useState(false);
   const [selectedQuality, setSelectedQuality] = useState<QualityOption>('Auto');
   const [selectedSpeed, setSelectedSpeed] = useState<PlaybackSpeed>(1);
   const [controlsVisible, setControlsVisible] = useState(true);
   const [isBuffering, setIsBuffering] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [qualitySwitchNotice, setQualitySwitchNotice] = useState<string | null>(null);
+  const [volumeHudNotice, setVolumeHudNotice] = useState<string | null>(null);
+
+  // Double click ripple animation feedback
+  const [seekRipple, setSeekRipple] = useState<{ direction: 'forward' | 'backward'; count: number } | null>(null);
+
+  // Timeline hover scrub tooltip
+  const [hoverTime, setHoverTime] = useState<number | null>(null);
+  const [hoverPositionX, setHoverPositionX] = useState<number>(0);
+
+  // Bookmarks / Lecture Timestamps
+  const bookmarkStorageKey = `10prv_bookmarks_${lesson.id}`;
+  const [bookmarks, setBookmarks] = useState<TimestampBookmark[]>(() => {
+    try {
+      const saved = localStorage.getItem(bookmarkStorageKey);
+      return saved ? JSON.parse(saved) : [];
+    } catch {
+      return [];
+    }
+  });
+  const [newNoteText, setNewNoteText] = useState('');
 
   // Resolution detection
-  const [nativeResolution, setNativeResolution] = useState<{
-    width: number;
-    height: number;
-    label: string;
-  } | null>(null);
   const [availableQualities, setAvailableQualities] = useState<QualityOption[]>([
     'Auto',
     '1080p',
@@ -109,10 +149,64 @@ export const VideoPlayerModal: React.FC<VideoPlayerModalProps> = ({
 
   const videoRef = useRef<HTMLVideoElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
+  const seekBarRef = useRef<HTMLDivElement>(null);
   const controlsTimeoutRef = useRef<any>(null);
-  const pendingSeekTime = useRef<number | null>(null);
   const hlsRef = useRef<any>(null);
+  const hudTimeoutRef = useRef<any>(null);
 
+  // Playlist index tracking for Next / Previous buttons
+  const currentIndex = lessons.findIndex((l) => l.id === lesson.id);
+  const prevLesson = currentIndex > 0 ? lessons[currentIndex - 1] : null;
+  const nextLesson = currentIndex >= 0 && currentIndex < lessons.length - 1 ? lessons[currentIndex + 1] : null;
+
+  // Save bookmarks
+  const saveBookmarks = (list: TimestampBookmark[]) => {
+    setBookmarks(list);
+    try {
+      localStorage.setItem(bookmarkStorageKey, JSON.stringify(list));
+    } catch (e) {
+      console.warn('Failed to save bookmark:', e);
+    }
+  };
+
+  const addBookmark = () => {
+    if (!videoRef.current) return;
+    const time = Math.floor(videoRef.current.currentTime);
+    const label = newNoteText.trim() || `Lecture note at ${formatTime(time)}`;
+    const newEntry: TimestampBookmark = {
+      id: `${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
+      time,
+      label,
+      createdAt: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+    };
+    saveBookmarks([...bookmarks, newEntry]);
+    setNewNoteText('');
+  };
+
+  const removeBookmark = (id: string) => {
+    saveBookmarks(bookmarks.filter((b) => b.id !== id));
+  };
+
+  const jumpToTime = (time: number) => {
+    if (videoRef.current) {
+      videoRef.current.currentTime = time;
+      setCurrentTime(time);
+      if (videoRef.current.paused) {
+        videoRef.current.play().catch(() => {});
+      }
+    }
+  };
+
+  // Trigger on-screen HUD for volume/actions
+  const showHud = (text: string) => {
+    setVolumeHudNotice(text);
+    if (hudTimeoutRef.current) clearTimeout(hudTimeoutRef.current);
+    hudTimeoutRef.current = setTimeout(() => {
+      setVolumeHudNotice(null);
+    }, 1500);
+  };
+
+  // Initialize HLS / Native Progressive Stream
   useEffect(() => {
     if (!isVideo || !videoRef.current) return;
     const video = videoRef.current;
@@ -120,13 +214,19 @@ export const VideoPlayerModal: React.FC<VideoPlayerModalProps> = ({
 
     let hlsInstance: any = null;
 
-    // Only attempt HLS when masterPlaylistUrl is explicitly available
     if (masterPlaylistUrl && Hls.isSupported()) {
       hlsInstance = new Hls({
-        capLevelToPlayerSize: true,
+        enableWorker: true,
+        capLevelToPlayerSize: false,
         autoStartLoad: true,
+        startLevel: -1,
+        startFragPrefetch: true,
         maxBufferLength: 30,
         maxMaxBufferLength: 60,
+        maxBufferSize: 60 * 1000 * 1000,
+        backBufferLength: 30,
+        progressive: true,
+        abrEwmaDefaultEstimate: 4000000,
       });
       hlsRef.current = hlsInstance;
       hlsInstance.loadSource(masterPlaylistUrl);
@@ -143,14 +243,14 @@ export const VideoPlayerModal: React.FC<VideoPlayerModalProps> = ({
       hlsInstance.on(Hls.Events.LEVEL_SWITCHED, (_event: any, data: any) => {
         const lvl = hlsInstance?.levels[data.level];
         if (lvl) {
-          setQualitySwitchNotice(`Adaptive Quality: ${lvl.height}p`);
-          setTimeout(() => setQualitySwitchNotice(null), 2500);
+          setQualitySwitchNotice(`Quality: ${lvl.height}p`);
+          setTimeout(() => setQualitySwitchNotice(null), 2000);
         }
       });
 
       hlsInstance.on(Hls.Events.ERROR, (_event: any, data: any) => {
         if (data.fatal) {
-          console.warn('HLS encountered fatal error, smoothly falling back to progressive stream:', data.details);
+          console.warn('HLS fallback to progressive stream:', data.details);
           hlsInstance?.destroy();
           hlsRef.current = null;
           video.src = fallbackUrl;
@@ -174,6 +274,7 @@ export const VideoPlayerModal: React.FC<VideoPlayerModalProps> = ({
     };
   }, [lesson.id, isVideo, masterPlaylistUrl, currentUser?.email]);
 
+  // Watermark drifting animation
   useEffect(() => {
     const timer = setInterval(() => {
       const top = `${12 + Math.floor(Math.random() * 65)}%`;
@@ -183,6 +284,7 @@ export const VideoPlayerModal: React.FC<VideoPlayerModalProps> = ({
     return () => clearInterval(timer);
   }, []);
 
+  // Fullscreen state listener
   useEffect(() => {
     const handleFullscreenChange = () => {
       const isFs = Boolean(
@@ -196,111 +298,201 @@ export const VideoPlayerModal: React.FC<VideoPlayerModalProps> = ({
 
     document.addEventListener('fullscreenchange', handleFullscreenChange);
     document.addEventListener('webkitfullscreenchange', handleFullscreenChange);
-    document.addEventListener('mozfullscreenchange', handleFullscreenChange);
-
     return () => {
       document.removeEventListener('fullscreenchange', handleFullscreenChange);
       document.removeEventListener('webkitfullscreenchange', handleFullscreenChange);
-      document.removeEventListener('mozfullscreenchange', handleFullscreenChange);
     };
   }, []);
 
-  const handleMouseMove = useCallback(() => {
+  // Controls auto-hide timer
+  const resetControlsTimeout = useCallback(() => {
     setControlsVisible(true);
     if (controlsTimeoutRef.current) {
       clearTimeout(controlsTimeoutRef.current);
     }
-    if (isFullscreen && isPlaying) {
-      controlsTimeoutRef.current = setTimeout(() => {
+    controlsTimeoutRef.current = setTimeout(() => {
+      if (isPlaying) {
         setControlsVisible(false);
         setShowSettings(false);
-      }, 2500);
-    }
-  }, [isFullscreen, isPlaying]);
+        setShowSpeedMenu(false);
+      }
+    }, 3200);
+  }, [isPlaying]);
 
+  // Comprehensive Keyboard Shortcuts Listener
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) {
+      // Ignore if user is currently typing in an input/textarea
+      const tag = (e.target as HTMLElement)?.tagName?.toLowerCase();
+      if (tag === 'input' || tag === 'textarea') return;
+
+      if (!isVideo) {
+        if (e.key === 'Escape') onClose();
         return;
       }
 
-      if (e.key === 'Escape') {
-        if (isFullscreen) {
-          exitFullscreen();
-        } else {
-          onClose();
-        }
-      } else if (e.key === ' ' || e.key === 'k') {
-        e.preventDefault();
-        togglePlay();
-      } else if (e.key.toLowerCase() === 'f') {
-        e.preventDefault();
-        toggleFullscreen();
-      } else if (e.key.toLowerCase() === 'm') {
-        e.preventDefault();
-        toggleMute();
-      } else if (e.key === 'ArrowLeft') {
-        e.preventDefault();
-        seekDelta(-5);
-      } else if (e.key === 'ArrowRight') {
-        e.preventDefault();
-        seekDelta(5);
-      }
-
-      // Anti-Download interceptor
-      if (
-        (e.ctrlKey || e.metaKey) &&
-        ['s', 'u', 'p', 'c'].includes(e.key.toLowerCase())
-      ) {
-        e.preventDefault();
+      switch (e.key.toLowerCase()) {
+        case ' ':
+        case 'k':
+          e.preventDefault();
+          togglePlay();
+          break;
+        case 'f':
+          e.preventDefault();
+          toggleFullscreen();
+          break;
+        case 't':
+          e.preventDefault();
+          setIsTheaterMode((prev) => !prev);
+          showHud(isTheaterMode ? 'Default View' : 'Theater Mode');
+          break;
+        case 'm':
+          e.preventDefault();
+          toggleMute();
+          break;
+        case 'j':
+        case 'arrowleft':
+          e.preventDefault();
+          seekDelta(-10);
+          break;
+        case 'l':
+        case 'arrowright':
+          e.preventDefault();
+          seekDelta(10);
+          break;
+        case 'arrowup':
+          e.preventDefault();
+          adjustVolume(0.1);
+          break;
+        case 'arrowdown':
+          e.preventDefault();
+          adjustVolume(-0.1);
+          break;
+        case 'r':
+          e.preventDefault();
+          setIsLooping((l) => {
+            const next = !l;
+            if (videoRef.current) videoRef.current.loop = next;
+            showHud(next ? 'Loop: On' : 'Loop: Off');
+            return next;
+          });
+          break;
+        case 'p':
+          e.preventDefault();
+          togglePiP();
+          break;
+        case '?':
+        case 'h':
+          e.preventDefault();
+          setShowShortcutsModal((prev) => !prev);
+          break;
+        case 'escape':
+          if (showShortcutsModal) {
+            setShowShortcutsModal(false);
+          } else if (isFullscreen) {
+            toggleFullscreen();
+          } else {
+            onClose();
+          }
+          break;
+        case '0':
+        case '1':
+        case '2':
+        case '3':
+        case '4':
+        case '5':
+        case '6':
+        case '7':
+        case '8':
+        case '9':
+          if (videoRef.current && duration > 0) {
+            e.preventDefault();
+            const pct = parseInt(e.key, 10) * 0.1;
+            const target = duration * pct;
+            videoRef.current.currentTime = target;
+            setCurrentTime(target);
+            showHud(`${parseInt(e.key, 10) * 10}%`);
+          }
+          break;
+        default:
+          break;
       }
     };
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [isFullscreen, isPlaying, onClose]);
-
-  const hasApiKey = Boolean(
-    currentUser?.geminiApiKey ||
-    (currentUser?.email ? localStorage.getItem(`10prv_gemini_key_${currentUser.email}`) : '') ||
-    localStorage.getItem('10prv_global_gemini_key')
-  );
-
-  const photoFiles = (lesson as HomeworkRecord)?.fileNames || [];
-  const hasMultiplePhotos = photoFiles.length > 1;
-
-  // Stream URL based on item type
-  const streamUrl = isHomework
-    ? `/api/homework/${lesson.id}/stream?auth=${encodeURIComponent(
-        currentUser?.email || ''
-      )}&fileIndex=${currentPhotoIndex}`
-    : `/api/videos/${lesson.id}/stream?auth=${encodeURIComponent(
-        currentUser?.email || ''
-      )}&quality=${selectedQuality.toLowerCase()}`;
+  }, [isVideo, isPlaying, isFullscreen, isTheaterMode, duration, showShortcutsModal]);
 
   const togglePlay = () => {
     if (!videoRef.current) return;
-    if (videoRef.current.paused) {
-      videoRef.current.play().catch(() => {});
-      setIsPlaying(true);
-    } else {
+    if (isPlaying) {
       videoRef.current.pause();
       setIsPlaying(false);
+      setControlsVisible(true);
+      showHud('Paused');
+    } else {
+      videoRef.current.play().catch(() => {});
+      setIsPlaying(true);
+      resetControlsTimeout();
+      showHud('Playing');
+    }
+  };
+
+  const seekDelta = (seconds: number) => {
+    if (!videoRef.current) return;
+    const newTime = Math.max(0, Math.min(duration, videoRef.current.currentTime + seconds));
+    videoRef.current.currentTime = newTime;
+    setCurrentTime(newTime);
+    showHud(`${seconds > 0 ? '+' : ''}${seconds}s`);
+    resetControlsTimeout();
+  };
+
+  const handleDoubleTap = (e: React.MouseEvent<HTMLDivElement>) => {
+    const rect = e.currentTarget.getBoundingClientRect();
+    const clickX = e.clientX - rect.left;
+    const isLeftSide = clickX < rect.width / 2;
+
+    if (isLeftSide) {
+      seekDelta(-10);
+      setSeekRipple({ direction: 'backward', count: 10 });
+    } else {
+      seekDelta(10);
+      setSeekRipple({ direction: 'forward', count: 10 });
+    }
+
+    setTimeout(() => {
+      setSeekRipple(null);
+    }, 650);
+  };
+
+  const adjustVolume = (delta: number) => {
+    if (!videoRef.current) return;
+    const newVol = Math.max(0, Math.min(1, volume + delta));
+    setVolume(newVol);
+    videoRef.current.volume = newVol;
+    if (newVol > 0 && isMuted) {
+      setIsMuted(false);
+      videoRef.current.muted = false;
+    }
+    showHud(`Volume: ${Math.round(newVol * 100)}%`);
+  };
+
+  const handleVolumeChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const val = parseFloat(e.target.value);
+    setVolume(val);
+    if (videoRef.current) {
+      videoRef.current.volume = val;
+      videoRef.current.muted = val === 0;
+      setIsMuted(val === 0);
     }
   };
 
   const toggleMute = () => {
     if (!videoRef.current) return;
     const next = !isMuted;
-    videoRef.current.muted = next;
     setIsMuted(next);
-  };
-
-  const seekDelta = (delta: number) => {
-    if (!videoRef.current) return;
-    const target = Math.max(0, Math.min(videoRef.current.duration || 0, videoRef.current.currentTime + delta));
-    videoRef.current.currentTime = target;
-    setCurrentTime(target);
+    videoRef.current.muted = next;
+    showHud(next ? 'Muted' : `Volume: ${Math.round(volume * 100)}%`);
   };
 
   const handleProgress = () => {
@@ -320,17 +512,31 @@ export const VideoPlayerModal: React.FC<VideoPlayerModalProps> = ({
   const handleTimeUpdate = () => {
     if (videoRef.current) {
       setCurrentTime(videoRef.current.currentTime);
-      setDuration(videoRef.current.duration || 0);
       handleProgress();
     }
   };
 
   const handleSeek = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const time = parseFloat(e.target.value);
+    const target = parseFloat(e.target.value);
     if (videoRef.current) {
-      videoRef.current.currentTime = time;
-      setCurrentTime(time);
+      videoRef.current.currentTime = target;
     }
+    setCurrentTime(target);
+  };
+
+  const handleSeekBarMouseMove = (e: React.MouseEvent<HTMLDivElement>) => {
+    if (!seekBarRef.current || duration <= 0) return;
+    const rect = seekBarRef.current.getBoundingClientRect();
+    const offsetX = Math.max(0, Math.min(rect.width, e.clientX - rect.left));
+    const pct = offsetX / rect.width;
+    setHoverTime(pct * duration);
+    setHoverPositionX(offsetX);
+  };
+
+  const handleLoadedMetadata = () => {
+    if (!videoRef.current) return;
+    setDuration(videoRef.current.duration || 0);
+    setIsBuffering(false);
   };
 
   const handleSpeedChange = (speed: PlaybackSpeed) => {
@@ -338,38 +544,8 @@ export const VideoPlayerModal: React.FC<VideoPlayerModalProps> = ({
     if (videoRef.current) {
       videoRef.current.playbackRate = speed;
     }
-  };
-
-  const handleLoadedMetadata = () => {
-    if (!videoRef.current) return;
-    setLoadError(null);
-    const width = videoRef.current.videoWidth;
-    const height = videoRef.current.videoHeight;
-
-    let resLabel = `${width}×${height}`;
-    if (height >= 1080) {
-      resLabel = `${width}×${height} (1080p Full HD)`;
-      setAvailableQualities(['Auto', '1080p', '720p', '480p', '360p']);
-    } else if (height >= 720) {
-      resLabel = `${width}×${height} (720p HD)`;
-      setAvailableQualities(['Auto', '720p', '480p', '360p']);
-    } else if (height >= 480) {
-      resLabel = `${width}×${height} (480p SD)`;
-      setAvailableQualities(['Auto', '480p', '360p']);
-    } else if (height > 0) {
-      resLabel = `${width}×${height} (360p)`;
-      setAvailableQualities(['Auto', '360p']);
-    }
-
-    setNativeResolution({ width, height, label: resLabel });
-
-    if (pendingSeekTime.current !== null) {
-      videoRef.current.currentTime = pendingSeekTime.current;
-      pendingSeekTime.current = null;
-      if (isPlaying) {
-        videoRef.current.play().catch(() => {});
-      }
-    }
+    setShowSpeedMenu(false);
+    showHud(`Speed: ${speed}x`);
   };
 
   const handleQualityChange = (quality: QualityOption) => {
@@ -386,26 +562,16 @@ export const VideoPlayerModal: React.FC<VideoPlayerModalProps> = ({
       setQualitySwitchNotice(null);
     }, 2000);
 
-    if (hlsRef.current) {
+    if (hlsRef.current && hlsRef.current.levels && hlsRef.current.levels.length > 0) {
       if (quality === 'Auto') {
-        hlsRef.current.currentLevel = -1; // Auto
+        hlsRef.current.nextLevel = -1;
+        hlsRef.current.currentLevel = -1;
       } else {
         const targetHeight = parseInt(quality.replace('p', ''), 10);
         const levelIndex = hlsRef.current.levels.findIndex((l: any) => l.height === targetHeight);
         if (levelIndex !== -1) {
-          hlsRef.current.currentLevel = levelIndex;
+          hlsRef.current.nextLevel = levelIndex;
         }
-      }
-    } else if (videoRef.current) {
-      const prevTime = videoRef.current.currentTime;
-      const wasPaused = videoRef.current.paused;
-      videoRef.current.src = `/api/videos/${lesson.id}/stream?auth=${encodeURIComponent(
-        currentUser?.email || ''
-      )}&quality=${quality.toLowerCase()}`;
-      videoRef.current.load();
-      videoRef.current.currentTime = prevTime;
-      if (!wasPaused) {
-        videoRef.current.play().catch(() => {});
       }
     }
   };
@@ -420,318 +586,190 @@ export const VideoPlayerModal: React.FC<VideoPlayerModalProps> = ({
           await container.requestFullscreen();
         } else if ((container as any).webkitRequestFullscreen) {
           await (container as any).webkitRequestFullscreen();
-        } else if ((container as any).mozRequestFullScreen) {
-          await (container as any).mozRequestFullScreen();
-        } else if ((container as any).msRequestFullscreen) {
-          await (container as any).msRequestFullscreen();
         }
-        setIsFullscreen(true);
-      } catch (err) {
-        console.error('Fullscreen request failed:', err);
+      } catch (e) {
+        console.warn('Fullscreen error:', e);
       }
     } else {
-      exitFullscreen();
+      try {
+        if (document.exitFullscreen) {
+          await document.exitFullscreen();
+        } else if ((document as any).webkitExitFullscreen) {
+          await (document as any).webkitExitFullscreen();
+        }
+      } catch (e) {
+        console.warn('Exit fullscreen error:', e);
+      }
     }
   };
 
-  const exitFullscreen = () => {
+  const togglePiP = async () => {
+    if (!videoRef.current) return;
     try {
-      if (document.exitFullscreen) {
-        document.exitFullscreen().catch(() => {});
-      } else if ((document as any).webkitExitFullscreen) {
-        (document as any).webkitExitFullscreen();
-      } else if ((document as any).mozCancelFullScreen) {
-        (document as any).mozCancelFullScreen();
-      } else if ((document as any).msExitFullscreen) {
-        (document as any).msExitFullscreen();
+      if (document.pictureInPictureElement) {
+        await document.exitPictureInPicture();
+        showHud('Exited PiP');
+      } else if (document.pictureInPictureEnabled) {
+        await videoRef.current.requestPictureInPicture();
+        showHud('Picture-in-Picture Active');
       }
-    } catch {}
-    setIsFullscreen(false);
+    } catch (err) {
+      console.warn('PiP error:', err);
+    }
   };
 
   const formatTime = (seconds: number) => {
-    if (isNaN(seconds)) return '0:00';
-    const mins = Math.floor(seconds / 60);
-    const secs = Math.floor(seconds % 60);
-    return `${mins}:${secs < 10 ? '0' : ''}${secs}`;
+    if (isNaN(seconds)) return '00:00';
+    const h = Math.floor(seconds / 3600);
+    const m = Math.floor((seconds % 3600) / 60);
+    const s = Math.floor(seconds % 60);
+    if (h > 0) {
+      return `${h}:${m < 10 ? '0' : ''}${m}:${s < 10 ? '0' : ''}${s}`;
+    }
+    return `${m < 10 ? '0' : ''}${m}:${s < 10 ? '0' : ''}${s}`;
   };
 
-  // Delete permission check
-  const uploaderEmail = (lesson as any).uploaderEmail || (lesson as any).studentEmail;
-  const canDelete =
-    Boolean(currentUser?.role === 'admin') ||
-    Boolean(uploaderEmail && uploaderEmail.toLowerCase() === currentUser?.email?.toLowerCase()) ||
-    Boolean(currentUser?.role === 'teacher');
-
   const handleDelete = async () => {
-    if (!canDelete) return;
+    if (!onDeleteLesson) return;
     setIsDeleting(true);
+    setDeleteError(null);
     try {
-      if (onDeleteLesson) {
-        await onDeleteLesson(lesson.id);
-      } else {
-        const endpoint = isHomework ? `/api/homework/${lesson.id}` : `/api/videos/${lesson.id}`;
-        const res = await fetch(endpoint, {
-          method: 'DELETE',
-          headers: {
-            'x-user-email': currentUser?.email || '',
-          },
-        });
-        if (!res.ok) {
-          const err = await res.json();
-          throw new Error(err.error || 'Failed to delete item.');
-        }
-      }
+      await onDeleteLesson(lesson.id);
       onClose();
     } catch (err: any) {
-      setDeleteError(err.message || 'Error deleting item.');
-      setTimeout(() => setDeleteError(null), 4000);
-    } finally {
+      setDeleteError(err.message || 'Failed to delete lesson.');
       setIsDeleting(false);
-      setConfirmDelete(false);
     }
   };
 
-  const creatorName =
-    (lesson as any).uploader || (lesson as any).studentName || 'Student';
-
   return (
     <div
-      onContextMenu={(e) => {
-        e.preventDefault();
-        return false;
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/90 backdrop-blur-md p-2 sm:p-4 overflow-y-auto"
+      onClick={(e) => {
+        if (e.target === e.currentTarget) onClose();
       }}
-      className="fixed inset-0 z-50 bg-black/80 backdrop-blur-md flex items-center justify-center p-2 sm:p-4 md:p-6 overflow-y-auto select-none"
     >
-      {/* Glassmorphic Modal Window */}
       <div
         ref={containerRef}
-        onMouseMove={handleMouseMove}
-        className={`relative w-full transition-all duration-200 overflow-hidden flex flex-col ${
-          isFullscreen
-            ? 'h-screen max-w-none rounded-none bg-black'
-            : 'max-w-5xl ios-glass-elevated rounded-3xl shadow-2xl border border-black/10 dark:border-white/15 max-h-[95vh]'
-        }`}
+        onMouseMove={resetControlsTimeout}
+        className={`relative w-full ${
+          isTheaterMode ? 'max-w-[98vw] h-[92vh]' : 'max-w-5xl max-h-[92vh]'
+        } bg-slate-950 rounded-2xl sm:rounded-3xl border border-sky-400/20 shadow-2xl overflow-hidden flex flex-col transition-all duration-300`}
       >
         {/* Top Header Bar */}
-        {(!isFullscreen || controlsVisible) && (
-          <div
-            className={`px-4 sm:px-5 py-3 border-b flex items-center justify-between z-20 transition-opacity duration-200 ${
-              isFullscreen
-                ? 'absolute top-0 inset-x-0 bg-linear-to-b from-black/90 to-transparent border-transparent'
-                : 'bg-white/80 dark:bg-black/80 backdrop-blur-md border-black/5 dark:border-white/10'
-            }`}
-          >
-            <div className="flex items-center gap-2.5 min-w-0">
-              <span className="px-2 py-0.5 rounded-md text-[10px] font-bold bg-black/5 dark:bg-white/10 text-black dark:text-white border border-black/10 dark:border-white/10 shrink-0">
-                {lesson.category}
-              </span>
-
-              <div className="flex items-center gap-1.5 text-xs font-bold text-black dark:text-white truncate">
-                {isPdf ? (
-                  <FileText className="w-3.5 h-3.5 shrink-0" />
-                ) : isDoc ? (
-                  <BookOpen className="w-3.5 h-3.5 shrink-0" />
-                ) : isPhoto ? (
-                  <ImageIcon className="w-3.5 h-3.5 shrink-0" />
-                ) : (
-                  <VideoIcon className="w-3.5 h-3.5 shrink-0" />
-                )}
-                <span className="truncate">{lesson.title}</span>
-              </div>
-
-              {nativeResolution && isVideo && (
-                <span className="hidden md:inline-block px-1.5 py-0.5 rounded text-[9px] font-mono bg-black/5 dark:bg-white/10 text-neutral-600 dark:text-neutral-400">
-                  {nativeResolution.label}
-                </span>
+        <div className="relative z-30 flex items-center justify-between px-4 sm:px-6 py-3 bg-slate-950/90 border-b border-white/10 backdrop-blur-md">
+          <div className="flex items-center gap-3 min-w-0">
+            <div className="p-2 rounded-xl bg-sky-500/15 text-sky-400 border border-sky-400/30 shrink-0">
+              {isPhoto ? (
+                <ImageIcon className="w-4 h-4" />
+              ) : isPdf || isDoc ? (
+                <FileText className="w-4 h-4" />
+              ) : (
+                <VideoIcon className="w-4 h-4" />
               )}
             </div>
-
-            <div className="flex items-center gap-2 shrink-0">
-              <div className="hidden sm:flex items-center gap-1.5 px-2 py-0.5 rounded-lg bg-black/5 dark:bg-white/10 border border-black/10 dark:border-white/10 text-[10px] text-neutral-700 dark:text-neutral-300 font-semibold">
-                <Lock className="w-3 h-3" />
-                <span>Protected</span>
+            <div className="min-w-0">
+              <h3 className="text-sm sm:text-base font-bold text-white truncate">{lesson.title}</h3>
+              <div className="text-[11px] text-slate-400 flex items-center gap-2">
+                <span>{lesson.category}</span>
+                <span aria-hidden="true">·</span>
+                <span>{lesson.uploader || 'Instructor'}</span>
+                {lesson.size > 0 && (
+                  <>
+                    <span aria-hidden="true">·</span>
+                    <span>
+                      {lesson.size > 1024 * 1024 * 1024
+                        ? `${(lesson.size / (1024 * 1024 * 1024)).toFixed(2)} GB`
+                        : `${(lesson.size / (1024 * 1024)).toFixed(1)} MB`}
+                    </span>
+                  </>
+                )}
               </div>
-
-              {/* Working Delete Button */}
-              {canDelete && (
-                <div>
-                  {confirmDelete ? (
-                    <div className="flex items-center gap-1.5 bg-black/5 dark:bg-white/10 p-1 rounded-xl border border-black/10 dark:border-white/10">
-                      <span className="text-[10px] text-neutral-700 dark:text-neutral-300 font-semibold px-1">
-                        Delete?
-                      </span>
-                      <button
-                        onClick={handleDelete}
-                        disabled={isDeleting}
-                        className="px-2 py-0.5 rounded-lg bg-black text-white dark:bg-white dark:text-black text-[10px] font-bold cursor-pointer disabled:opacity-50"
-                      >
-                        {isDeleting ? <Loader2 className="w-3 h-3 animate-spin" /> : 'Confirm'}
-                      </button>
-                      <button
-                        onClick={() => setConfirmDelete(false)}
-                        disabled={isDeleting}
-                        className="px-2 py-0.5 rounded-lg btn-secondary-glass text-[10px] font-medium cursor-pointer"
-                      >
-                        Cancel
-                      </button>
-                    </div>
-                  ) : (
-                    <div className="flex items-center gap-1.5">
-                      {deleteError && (
-                        <span className="text-[10px] text-rose-500 font-semibold">{deleteError}</span>
-                      )}
-                      <button
-                        onClick={() => setConfirmDelete(true)}
-                        className="p-1.5 rounded-xl text-neutral-400 hover:text-black dark:hover:text-white hover:bg-black/5 dark:hover:bg-white/10 transition-colors cursor-pointer"
-                        title="Delete"
-                        aria-label="Delete"
-                      >
-                        <Trash2 className="w-3.5 h-3.5" />
-                      </button>
-                    </div>
-                  )}
-                </div>
-              )}
-
-              {/* Download Button */}
-              <a
-                href={`${streamUrl}&download=1`}
-                download={lesson.fileName || 'download'}
-                className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-sky-500 hover:bg-sky-600 text-white text-xs font-bold shadow-md transition-all cursor-pointer"
-                title="Download file"
-              >
-                <Download className="w-3.5 h-3.5" />
-                <span className="hidden sm:inline">Download</span>
-              </a>
-
-              <button
-                onClick={onClose}
-                className="p-1.5 rounded-xl text-neutral-400 hover:text-black dark:hover:text-white hover:bg-black/5 dark:hover:bg-white/10 transition-colors cursor-pointer"
-                title="Close"
-                aria-label="Close"
-              >
-                <X className="w-4 h-4" />
-              </button>
             </div>
           </div>
-        )}
 
-        {/* Media Viewing Canvas */}
-        <div
-          className={`relative bg-neutral-950 flex items-center justify-center overflow-hidden group ${
-            isFullscreen
-              ? 'flex-1 h-full w-full'
-              : isPdf || isDoc || isPhoto
-              ? 'w-full h-[75vh] min-h-[520px]'
-              : 'aspect-video w-full'
-          }`}
-        >
-          {/* PDF & Word Docs Preview */}
-          {isPdf || isDoc ? (
-            <div className="w-full h-full bg-slate-900 flex flex-col relative">
-              <object
-                data={streamUrl}
-                type={isPdf ? 'application/pdf' : 'text/plain'}
-                className="w-full h-full flex-1 bg-white"
+          {/* Quick Header Actions */}
+          <div className="flex items-center gap-1.5 shrink-0">
+            {/* Previous Lesson Button */}
+            {prevLesson && onSelectLesson && (
+              <button
+                onClick={() => onSelectLesson(prevLesson)}
+                className="p-1.5 sm:px-2.5 sm:py-1 rounded-xl bg-white/5 hover:bg-white/10 text-slate-300 hover:text-white border border-white/10 transition-colors text-xs font-semibold flex items-center gap-1 cursor-pointer"
+                title={`Previous: ${prevLesson.title}`}
               >
-                <iframe
-                  src={streamUrl}
-                  title={lesson.title}
-                  className="w-full h-full border-0 flex-1 bg-white"
-                />
-              </object>
+                <ChevronLeft className="w-4 h-4" />
+                <span className="hidden sm:inline">Prev</span>
+              </button>
+            )}
 
-              {/* Document bar for opening full view and actions */}
-              <div className="absolute top-3 right-3 z-30 flex items-center gap-2">
-                <a
-                  href={streamUrl}
-                  target="_blank"
-                  rel="noreferrer"
-                  className="px-3 py-1.5 rounded-xl bg-black/80 hover:bg-black text-white text-xs font-semibold border border-white/20 shadow-lg flex items-center gap-1.5 transition-all"
-                >
-                  <ExternalLink className="w-3.5 h-3.5 text-sky-400" />
-                  <span>Open Full Document</span>
-                </a>
-              </div>
-            </div>
-          ) : isPhoto ? (
-            /* Photo Viewer with Multi-page navigation & touch swipe support */
-            <div
-              className="relative w-full h-full flex items-center justify-center p-3 select-none touch-pan-y"
-              onTouchStart={(e) => {
-                if (!hasMultiplePhotos) return;
-                setTouchEndX(null);
-                setTouchStartX(e.targetTouches[0].clientX);
-              }}
-              onTouchMove={(e) => {
-                if (!hasMultiplePhotos) return;
-                setTouchEndX(e.targetTouches[0].clientX);
-              }}
-              onTouchEnd={() => {
-                if (!hasMultiplePhotos || touchStartX === null || touchEndX === null) return;
-                const distance = touchStartX - touchEndX;
-                const minSwipeDistance = 50;
-                if (distance > minSwipeDistance) {
-                  // Swipe left -> next
-                  setCurrentPhotoIndex((prev) => Math.min(photoFiles.length - 1, prev + 1));
-                } else if (distance < -minSwipeDistance) {
-                  // Swipe right -> prev
-                  setCurrentPhotoIndex((prev) => Math.max(0, prev - 1));
-                }
-                setTouchStartX(null);
-                setTouchEndX(null);
-              }}
+            {/* Next Lesson Button */}
+            {nextLesson && onSelectLesson && (
+              <button
+                onClick={() => onSelectLesson(nextLesson)}
+                className="p-1.5 sm:px-2.5 sm:py-1 rounded-xl bg-white/5 hover:bg-white/10 text-slate-300 hover:text-white border border-white/10 transition-colors text-xs font-semibold flex items-center gap-1 cursor-pointer"
+                title={`Next: ${nextLesson.title}`}
+              >
+                <span className="hidden sm:inline">Next</span>
+                <ChevronRight className="w-4 h-4" />
+              </button>
+            )}
+
+            {/* Bookmarks Toggle Button */}
+            {isVideo && (
+              <button
+                onClick={() => setShowNotesPanel((p) => !p)}
+                className={`p-2 rounded-xl border transition-colors cursor-pointer ${
+                  showNotesPanel
+                    ? 'bg-sky-500 text-white border-sky-400'
+                    : 'bg-white/5 hover:bg-white/10 text-slate-300 hover:text-white border-white/10'
+                }`}
+                title="Lecture Notes & Bookmarks"
+              >
+                <Bookmark className="w-4 h-4" />
+              </button>
+            )}
+
+            {/* Keyboard Shortcuts Button */}
+            {isVideo && (
+              <button
+                onClick={() => setShowShortcutsModal((p) => !p)}
+                className="p-2 rounded-xl bg-white/5 hover:bg-white/10 text-slate-300 hover:text-white border border-white/10 transition-colors cursor-pointer"
+                title="Keyboard Shortcuts (?)"
+              >
+                <HelpCircle className="w-4 h-4" />
+              </button>
+            )}
+
+            {/* Close Modal Button */}
+            <button
+              onClick={onClose}
+              className="p-2 rounded-xl bg-white/10 hover:bg-rose-500/20 text-white hover:text-rose-300 border border-white/10 transition-colors cursor-pointer ml-1"
+              title="Close (Esc)"
+              aria-label="Close"
             >
-              <img
-                key={streamUrl}
-                src={streamUrl}
-                alt={lesson.title}
-                draggable={false}
-                onContextMenu={(e) => e.preventDefault()}
-                className="max-w-full max-h-full object-contain pointer-events-none select-none"
+              <X className="w-4 h-4" />
+            </button>
+          </div>
+        </div>
+
+        {/* Main Content Area (Video, Photo, or PDF) */}
+        <div className="relative flex-1 bg-black flex items-center justify-center overflow-hidden min-h-[360px] sm:min-h-[480px]">
+          {isVideo ? (
+            <>
+              {/* Dynamic Double Tap / Click Gesture Area */}
+              <div
+                onDoubleClick={handleDoubleTap}
+                className="absolute inset-0 z-10 cursor-pointer"
+                onClick={togglePlay}
               />
 
-              {hasMultiplePhotos && (
-                <div className="absolute bottom-4 left-1/2 -translate-x-1/2 flex items-center gap-3 px-4 py-2 rounded-full bg-black/80 backdrop-blur-md text-white text-xs z-30 border border-white/15 shadow-xl">
-                  <button
-                    onClick={() => setCurrentPhotoIndex((prev) => Math.max(0, prev - 1))}
-                    disabled={currentPhotoIndex === 0}
-                    className="p-1.5 rounded-full hover:bg-white/20 disabled:opacity-30 cursor-pointer transition-colors"
-                    title="Previous Page"
-                    aria-label="Previous Page"
-                  >
-                    <ChevronLeft className="w-4 h-4" />
-                  </button>
-
-                  <span className="font-mono text-xs font-bold tracking-tight">
-                    Page {currentPhotoIndex + 1} of {photoFiles.length} (Swipe to navigate)
-                  </span>
-
-                  <button
-                    onClick={() =>
-                      setCurrentPhotoIndex((prev) => Math.min(photoFiles.length - 1, prev + 1))
-                    }
-                    disabled={currentPhotoIndex === photoFiles.length - 1}
-                    className="p-1.5 rounded-full hover:bg-white/20 disabled:opacity-30 cursor-pointer transition-colors"
-                    title="Next Page"
-                    aria-label="Next Page"
-                  >
-                    <ChevronRight className="w-4 h-4" />
-                  </button>
-                </div>
-              )}
-            </div>
-          ) : (
-            /* Video Player */
-            <>
+              {/* Video Element */}
               <video
                 ref={videoRef}
                 preload="auto"
                 autoPlay
                 playsInline
                 controlsList="nodownload nofullscreen"
-                onTimeUpdate={handleTimeUpdate}
                 onProgress={handleProgress}
                 onLoadedMetadata={handleLoadedMetadata}
                 onLoadedData={() => {
@@ -746,87 +784,114 @@ export const VideoPlayerModal: React.FC<VideoPlayerModalProps> = ({
                 onPlaying={() => {
                   setIsBuffering(false);
                   setIsPlaying(true);
-                  setLoadError(null);
                 }}
                 onPause={() => setIsPlaying(false)}
-                onError={() => {
-                  setIsBuffering(false);
-                  if (hlsRef.current) {
-                    hlsRef.current.destroy();
-                    hlsRef.current = null;
-                    if (videoRef.current) {
-                      videoRef.current.src = streamUrl;
-                      videoRef.current.load();
-                      videoRef.current.play().catch(() => {});
-                      return;
-                    }
-                  }
-                  setLoadError('Video failed to stream. Please verify your connection.');
-                }}
-                onClick={togglePlay}
-                onDoubleClick={toggleFullscreen}
-                onContextMenu={(e) => e.preventDefault()}
-                className="w-full h-full object-contain cursor-pointer"
-              >
-                Your browser does not support HTML5 video playback.
-              </video>
+                onTimeUpdate={handleTimeUpdate}
+                onError={() => setLoadError('Unable to stream video. Please check your connection.')}
+                className="w-full h-full object-contain max-h-[78vh]"
+              />
 
-              {isBuffering && (
-                <div className="absolute inset-0 flex items-center justify-center bg-black/40 pointer-events-none z-10">
-                  <Loader2 className="w-10 h-10 text-blue-500 animate-spin" />
-                </div>
-              )}
-
-              {qualitySwitchNotice && (
-                <div className="absolute top-4 left-1/2 -translate-x-1/2 px-3.5 py-1.5 rounded-xl bg-black/80 text-white text-xs font-semibold shadow-lg border border-white/20 z-30 flex items-center gap-2">
-                  <Settings className="w-3.5 h-3.5" />
-                  <span>{qualitySwitchNotice}</span>
-                </div>
-              )}
-
-              {loadError && (
-                <div className="absolute inset-0 flex flex-col items-center justify-center bg-neutral-950/90 text-center p-6 space-y-3 z-30">
-                  <AlertCircle className="w-8 h-8 text-neutral-400" />
-                  <div className="text-sm font-bold text-white">{loadError}</div>
-                  <button
-                    onClick={() => {
-                      setLoadError(null);
-                      if (videoRef.current) {
-                        videoRef.current.load();
-                        videoRef.current.play().catch(() => {});
-                      }
-                    }}
-                    className="px-4 py-2 rounded-xl bg-white text-black text-xs font-semibold cursor-pointer flex items-center gap-2"
-                  >
-                    <RotateCcw className="w-3.5 h-3.5" />
-                    <span>Retry Stream</span>
-                  </button>
-                </div>
-              )}
-
-              {/* Controls Bar */}
+              {/* Security Floating DRM Dynamic Watermark */}
               <div
-                className={`absolute inset-x-0 bottom-0 bg-linear-to-t from-black/95 via-black/60 to-transparent p-4 flex flex-col gap-2 transition-opacity duration-200 z-30 ${
+                className="absolute z-20 pointer-events-none select-none text-[10px] font-mono text-white/20 font-bold px-2 py-0.5 rounded bg-black/20 backdrop-blur-[1px] transition-all duration-1000 ease-in-out"
+                style={{ top: watermarkPos.top, left: watermarkPos.left }}
+              >
+                10Prv · {currentUser?.email || 'Student View'}
+              </div>
+
+              {/* On-Screen HUD Action Feedback (Volume, Seek, Speed) */}
+              {volumeHudNotice && (
+                <div className="absolute top-8 left-1/2 -translate-x-1/2 z-30 px-3.5 py-1.5 rounded-2xl bg-black/80 backdrop-blur-md border border-white/20 text-white text-xs font-bold tracking-wide pointer-events-none shadow-xl transition-all animate-fade-in">
+                  {volumeHudNotice}
+                </div>
+              )}
+
+              {/* Quality Switch Instant Notice */}
+              {qualitySwitchNotice && (
+                <div className="absolute top-8 left-1/2 -translate-x-1/2 z-30 px-3.5 py-1.5 rounded-2xl bg-sky-600/90 backdrop-blur-md border border-sky-400/40 text-white text-xs font-bold tracking-wide pointer-events-none shadow-xl transition-all animate-fade-in">
+                  {qualitySwitchNotice}
+                </div>
+              )}
+
+              {/* Double-Tap Skip Ripple Feedback */}
+              {seekRipple && (
+                <div
+                  className={`absolute top-1/2 -translate-y-1/2 z-30 flex flex-col items-center justify-center p-6 rounded-full bg-white/20 backdrop-blur-md text-white font-bold text-sm pointer-events-none shadow-2xl animate-ping ${
+                    seekRipple.direction === 'backward' ? 'left-16' : 'right-16'
+                  }`}
+                >
+                  {seekRipple.direction === 'backward' ? (
+                    <>
+                      <Rewind className="w-8 h-8 mb-1" />
+                      <span>-10s</span>
+                    </>
+                  ) : (
+                    <>
+                      <FastForward className="w-8 h-8 mb-1" />
+                      <span>+10s</span>
+                    </>
+                  )}
+                </div>
+              )}
+
+              {/* Buffering Spinner */}
+              {isBuffering && (
+                <div className="absolute inset-0 z-20 flex items-center justify-center bg-black/40 backdrop-blur-xs pointer-events-none">
+                  <div className="p-4 rounded-3xl bg-black/70 border border-white/20 flex flex-col items-center gap-2 shadow-2xl">
+                    <Loader2 className="w-8 h-8 animate-spin text-sky-400" />
+                    <span className="text-xs font-semibold text-white">Streaming lecture...</span>
+                  </div>
+                </div>
+              )}
+
+              {/* Controls Overlay */}
+              <div
+                className={`absolute inset-x-0 bottom-0 z-30 p-3 sm:p-5 bg-gradient-to-t from-black/95 via-black/70 to-transparent transition-opacity duration-300 ${
                   controlsVisible ? 'opacity-100' : 'opacity-0 pointer-events-none'
                 }`}
               >
-                {/* Dual-Layer Real-Time Buffer + Playback Progress Track */}
-                <div className="relative w-full h-1.5 hover:h-2.5 bg-white/20 rounded-full transition-all flex items-center group cursor-pointer">
-                  {/* Background Buffer (Loading while Playing) */}
+                {/* Dual-Layer Precision Seek Bar with Hover Timecard Tooltip */}
+                <div
+                  ref={seekBarRef}
+                  onMouseMove={handleSeekBarMouseMove}
+                  onMouseLeave={() => setHoverTime(null)}
+                  className="relative w-full h-2 hover:h-3 bg-white/20 rounded-full transition-all flex items-center group cursor-pointer mb-3"
+                >
+                  {/* Floating Hover Timecard Tooltip */}
+                  {hoverTime !== null && (
+                    <div
+                      className="absolute -top-7 -translate-x-1/2 px-2 py-0.5 rounded-md bg-slate-950 border border-white/20 text-white font-mono text-[10px] font-bold shadow-lg pointer-events-none z-30"
+                      style={{ left: `${hoverPositionX}px` }}
+                    >
+                      {formatTime(hoverTime)}
+                    </div>
+                  )}
+
+                  {/* Progressive Background Download Buffer Fill */}
                   <div
                     className="absolute top-0 bottom-0 left-0 bg-white/40 rounded-full transition-all duration-200 pointer-events-none"
                     style={{
                       width: `${Math.min(100, (bufferedEnd / (duration || 1)) * 100)}%`,
                     }}
                   />
-                  {/* Active Playback Position Fill */}
+
+                  {/* Active Playback Fill */}
                   <div
-                    className="absolute top-0 bottom-0 left-0 bg-sky-500 rounded-full pointer-events-none shadow-sm"
+                    className="absolute top-0 bottom-0 left-0 bg-gradient-to-r from-sky-400 to-blue-500 rounded-full pointer-events-none shadow-sm"
                     style={{
                       width: `${Math.min(100, (currentTime / (duration || 1)) * 100)}%`,
                     }}
                   />
-                  {/* Seek input overlay for fluid scrub control */}
+
+                  {/* Scrubber Knob */}
+                  <div
+                    className="absolute top-1/2 -translate-y-1/2 w-3.5 h-3.5 bg-white rounded-full shadow-md scale-0 group-hover:scale-100 transition-transform pointer-events-none"
+                    style={{
+                      left: `calc(${Math.min(100, (currentTime / (duration || 1)) * 100)}% - 7px)`,
+                    }}
+                  />
+
+                  {/* Native Range Input Scrub Control */}
                   <input
                     type="range"
                     min={0}
@@ -834,35 +899,55 @@ export const VideoPlayerModal: React.FC<VideoPlayerModalProps> = ({
                     step={0.1}
                     value={currentTime}
                     onChange={handleSeek}
-                    className="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-10"
+                    className="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-20"
                     aria-label="Seek video position"
                   />
                 </div>
 
+                {/* Bottom Control Buttons Row */}
                 <div className="flex items-center justify-between text-white text-xs">
-                  <div className="flex items-center gap-3">
+                  {/* Left Controls (Play, Skip, Volume, Timestamp) */}
+                  <div className="flex items-center gap-2 sm:gap-3">
+                    {/* Play/Pause */}
                     <button
                       onClick={togglePlay}
-                      className="p-1 rounded-md hover:bg-white/10 transition-colors cursor-pointer"
-                      aria-label={isPlaying ? 'Pause' : 'Play'}
+                      className="p-1.5 rounded-xl hover:bg-white/20 transition-colors cursor-pointer"
+                      title={isPlaying ? 'Pause (Space)' : 'Play (Space)'}
                     >
-                      {isPlaying ? (
-                        <Pause className="w-5 h-5 text-white" />
-                      ) : (
-                        <Play className="w-5 h-5 text-white" />
-                      )}
+                      {isPlaying ? <Pause className="w-5 h-5" /> : <Play className="w-5 h-5 fill-current" />}
                     </button>
 
-                    <div className="flex items-center gap-1.5">
+                    {/* Rewind 10s */}
+                    <button
+                      onClick={() => seekDelta(-10)}
+                      className="p-1.5 rounded-xl hover:bg-white/20 transition-colors cursor-pointer hidden sm:flex"
+                      title="Rewind 10s (J)"
+                    >
+                      <Rewind className="w-4 h-4" />
+                    </button>
+
+                    {/* Fast Forward 10s */}
+                    <button
+                      onClick={() => seekDelta(10)}
+                      className="p-1.5 rounded-xl hover:bg-white/20 transition-colors cursor-pointer hidden sm:flex"
+                      title="Forward 10s (L)"
+                    >
+                      <FastForward className="w-4 h-4" />
+                    </button>
+
+                    {/* Volume Controls & Expandable Slider */}
+                    <div className="flex items-center gap-1.5 group/vol">
                       <button
                         onClick={toggleMute}
-                        className="p-1 rounded-md hover:bg-white/10 cursor-pointer"
-                        aria-label={isMuted || volume === 0 ? 'Unmute' : 'Mute'}
+                        className="p-1.5 rounded-xl hover:bg-white/20 transition-colors cursor-pointer"
+                        title={isMuted ? 'Unmute (M)' : 'Mute (M)'}
                       >
                         {isMuted || volume === 0 ? (
-                          <VolumeX className="w-4 h-4 text-neutral-400" />
+                          <VolumeX className="w-4 h-4 text-rose-400" />
+                        ) : volume < 0.5 ? (
+                          <Volume1 className="w-4 h-4" />
                         ) : (
-                          <Volume2 className="w-4 h-4 text-white" />
+                          <Volume2 className="w-4 h-4" />
                         )}
                       </button>
                       <input
@@ -871,203 +956,325 @@ export const VideoPlayerModal: React.FC<VideoPlayerModalProps> = ({
                         max={1}
                         step={0.05}
                         value={isMuted ? 0 : volume}
-                        onChange={(e) => {
-                          const val = parseFloat(e.target.value);
-                          setVolume(val);
-                          setIsMuted(val === 0);
-                          if (videoRef.current) {
-                            videoRef.current.volume = val;
-                            videoRef.current.muted = val === 0;
-                          }
-                        }}
-                        className="w-14 h-1 bg-white/20 rounded accent-white cursor-pointer"
+                        onChange={handleVolumeChange}
+                        className="w-16 sm:w-20 h-1 bg-white/30 rounded appearance-none cursor-pointer accent-sky-400 hover:h-1.5 transition-all"
+                        aria-label="Volume slider"
                       />
                     </div>
 
-                    <div className="text-[11px] font-mono text-neutral-300">
+                    {/* Timestamp Display */}
+                    <div className="font-mono text-[11px] text-slate-300 ml-1">
                       <span>{formatTime(currentTime)}</span>
-                      <span className="text-neutral-500 mx-1">/</span>
+                      <span className="text-slate-500 mx-1">/</span>
                       <span>{formatTime(duration)}</span>
                     </div>
                   </div>
 
-                  <div className="flex items-center gap-2 relative">
+                  {/* Right Controls (Loop, Speed, Quality, PiP, Theater, Fullscreen) */}
+                  <div className="flex items-center gap-1.5 sm:gap-2">
+                    {/* Loop Toggle */}
+                    <button
+                      onClick={() => {
+                        setIsLooping((l) => {
+                          const next = !l;
+                          if (videoRef.current) videoRef.current.loop = next;
+                          showHud(next ? 'Loop: On' : 'Loop: Off');
+                          return next;
+                        });
+                      }}
+                      className={`p-1.5 rounded-xl transition-colors cursor-pointer hidden sm:block ${
+                        isLooping ? 'bg-sky-500 text-white' : 'hover:bg-white/20 text-slate-300'
+                      }`}
+                      title="Toggle Loop (R)"
+                    >
+                      <Repeat className="w-4 h-4" />
+                    </button>
+
+                    {/* Playback Speed Popover Menu */}
                     <div className="relative">
                       <button
-                        onClick={() => setShowSettings(!showSettings)}
-                        className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-white/10 hover:bg-white/20 text-[11px] font-medium text-white transition-colors cursor-pointer"
+                        onClick={() => {
+                          setShowSpeedMenu((p) => !p);
+                          setShowSettings(false);
+                        }}
+                        className="px-2 py-1 rounded-lg hover:bg-white/20 transition-colors font-mono text-xs font-bold cursor-pointer"
+                        title="Playback Speed"
                       >
-                        <Settings className="w-3.5 h-3.5" />
-                        <span>{selectedQuality}</span>
-                        <span className="text-neutral-400">·</span>
-                        <span>{selectedSpeed}x</span>
+                        {selectedSpeed}x
                       </button>
 
-                      {showSettings && (
-                        <div className="absolute right-0 bottom-full mb-2 w-56 bg-neutral-900/95 backdrop-blur-xl border border-white/15 rounded-2xl shadow-2xl p-3 space-y-3 text-xs z-50">
-                          <div>
-                            <div className="text-[10px] font-semibold uppercase tracking-wider text-neutral-400 mb-1.5 flex items-center justify-between">
-                              <span>Streaming Quality</span>
-                              {nativeResolution && (
-                                <span className="text-[9px] text-sky-400 normal-case font-mono font-bold">
-                                  {nativeResolution.height}p Native
-                                </span>
-                              )}
-                            </div>
-                            <div className="space-y-1">
-                              {availableQualities.map((q) => (
-                                <button
-                                  key={q}
-                                  onClick={() => handleQualityChange(q)}
-                                  className={`w-full px-2.5 py-1.5 rounded-lg text-left font-medium text-[11px] flex items-center justify-between cursor-pointer transition-colors ${
-                                    selectedQuality === q
-                                      ? 'bg-white text-black font-bold'
-                                      : 'text-neutral-300 hover:bg-white/10'
-                                  }`}
-                                >
-                                  <span>{q}</span>
-                                  {selectedQuality === q && <Check className="w-3.5 h-3.5" />}
-                                </button>
-                              ))}
-                            </div>
+                      {showSpeedMenu && (
+                        <div className="absolute bottom-9 right-0 w-32 bg-slate-900 border border-white/15 rounded-xl p-1 shadow-2xl backdrop-blur-xl z-40 space-y-0.5">
+                          <div className="text-[10px] font-bold text-slate-400 px-2 py-1 uppercase tracking-wider">
+                            Speed
                           </div>
-
-                          <div className="pt-2 border-t border-white/10">
-                            <div className="text-[10px] font-semibold uppercase tracking-wider text-neutral-400 mb-1.5">
-                              Speed
-                            </div>
-                            <div className="grid grid-cols-3 gap-1">
-                              {([0.5, 0.75, 1, 1.25, 1.5, 2] as PlaybackSpeed[]).map((spd) => (
-                                <button
-                                  key={spd}
-                                  onClick={() => {
-                                    handleSpeedChange(spd);
-                                    setShowSettings(false);
-                                  }}
-                                  className={`py-1 rounded-md text-center font-medium text-[11px] cursor-pointer transition-colors ${
-                                    selectedSpeed === spd
-                                      ? 'bg-white text-black font-bold'
-                                      : 'text-neutral-300 hover:bg-white/10'
-                                  }`}
-                                >
-                                  {spd}x
-                                </button>
-                              ))}
-                            </div>
-                          </div>
+                          {([0.5, 0.75, 1, 1.25, 1.5, 1.75, 2] as PlaybackSpeed[]).map((spd) => (
+                            <button
+                              key={spd}
+                              onClick={() => handleSpeedChange(spd)}
+                              className={`w-full text-left px-2.5 py-1 rounded-lg text-xs flex items-center justify-between cursor-pointer ${
+                                selectedSpeed === spd
+                                  ? 'bg-sky-500 text-white font-bold'
+                                  : 'text-slate-300 hover:bg-white/10'
+                              }`}
+                            >
+                              <span>{spd === 1 ? '1.0x (Normal)' : `${spd}x`}</span>
+                              {selectedSpeed === spd && <Check className="w-3 h-3" />}
+                            </button>
+                          ))}
                         </div>
                       )}
                     </div>
 
+                    {/* Quality Selector Popover Menu */}
+                    <div className="relative">
+                      <button
+                        onClick={() => {
+                          setShowSettings((p) => !p);
+                          setShowSpeedMenu(false);
+                        }}
+                        className="p-1.5 rounded-xl hover:bg-white/20 transition-colors cursor-pointer"
+                        title="Video Quality"
+                      >
+                        <Settings className="w-4 h-4" />
+                      </button>
+
+                      {showSettings && (
+                        <div className="absolute bottom-9 right-0 w-36 bg-slate-900 border border-white/15 rounded-xl p-1 shadow-2xl backdrop-blur-xl z-40 space-y-0.5">
+                          <div className="text-[10px] font-bold text-slate-400 px-2 py-1 uppercase tracking-wider">
+                            Quality
+                          </div>
+                          {availableQualities.map((q) => (
+                            <button
+                              key={q}
+                              onClick={() => handleQualityChange(q)}
+                              className={`w-full text-left px-2.5 py-1 rounded-lg text-xs flex items-center justify-between cursor-pointer ${
+                                selectedQuality === q
+                                  ? 'bg-sky-500 text-white font-bold'
+                                  : 'text-slate-300 hover:bg-white/10'
+                              }`}
+                            >
+                              <span>{q}</span>
+                              {selectedQuality === q && <Check className="w-3 h-3" />}
+                            </button>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Picture-in-Picture */}
+                    <button
+                      onClick={togglePiP}
+                      className="p-1.5 rounded-xl hover:bg-white/20 transition-colors cursor-pointer hidden sm:block"
+                      title="Picture-in-Picture (P)"
+                    >
+                      <Tv className="w-4 h-4" />
+                    </button>
+
+                    {/* Theater Mode Toggle */}
+                    <button
+                      onClick={() => setIsTheaterMode((p) => !p)}
+                      className={`p-1.5 rounded-xl transition-colors cursor-pointer hidden sm:block ${
+                        isTheaterMode ? 'bg-sky-500 text-white' : 'hover:bg-white/20 text-slate-300'
+                      }`}
+                      title="Theater Mode (T)"
+                    >
+                      <Minimize2 className="w-4 h-4" />
+                    </button>
+
+                    {/* Fullscreen Toggle */}
                     <button
                       onClick={toggleFullscreen}
-                      className="p-1.5 rounded-md hover:bg-white/10 transition-colors cursor-pointer"
-                      aria-label={isFullscreen ? 'Exit Fullscreen' : 'Enter Fullscreen'}
+                      className="p-1.5 rounded-xl hover:bg-white/20 transition-colors cursor-pointer"
+                      title="Fullscreen (F)"
                     >
-                      {isFullscreen ? (
-                        <Minimize2 className="w-4 h-4 text-white" />
-                      ) : (
-                        <Maximize2 className="w-4 h-4 text-white" />
-                      )}
+                      {isFullscreen ? <Minimize2 className="w-4 h-4" /> : <Maximize2 className="w-4 h-4" />}
                     </button>
                   </div>
                 </div>
               </div>
             </>
+          ) : isPhoto ? (
+            /* Photo Viewer */
+            <div className="relative w-full h-full flex items-center justify-center p-4">
+              <img
+                src={`/api/videos/${lesson.id}/stream`}
+                alt={lesson.title}
+                className="max-h-[75vh] max-w-full object-contain rounded-xl shadow-2xl"
+              />
+            </div>
+          ) : isPdf ? (
+            /* PDF Document Viewer */
+            <div className="w-full h-[75vh]">
+              <iframe
+                src={`/api/videos/${lesson.id}/stream#toolbar=1`}
+                title={lesson.title}
+                className="w-full h-full border-0 rounded-b-2xl bg-white"
+              />
+            </div>
+          ) : (
+            /* Word Doc or File fallback */
+            <div className="flex flex-col items-center justify-center p-12 text-center text-white space-y-4">
+              <div className="w-16 h-16 rounded-2xl bg-blue-500/20 text-blue-400 border border-blue-400/30 flex items-center justify-center">
+                <FileText className="w-8 h-8" />
+              </div>
+              <h4 className="font-bold text-lg">{lesson.title}</h4>
+              <p className="text-xs text-slate-400 max-w-md">
+                This document is stored securely in your private cloud. You can view it directly or download it below.
+              </p>
+              <a
+                href={`/api/videos/${lesson.id}/stream`}
+                download={lesson.fileName}
+                className="px-4 py-2 rounded-xl bg-sky-500 hover:bg-sky-600 text-white font-bold text-xs flex items-center gap-2 shadow-lg transition-all"
+              >
+                <Download className="w-4 h-4" />
+                <span>Download Document</span>
+              </a>
+            </div>
           )}
         </div>
 
-        {/* Details Card */}
-        {!isFullscreen && (
-          <div className="p-4 sm:p-6 bg-white/90 dark:bg-black/80 backdrop-blur-xl border-t border-black/5 dark:border-white/10 space-y-4 overflow-y-auto">
-            <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-2">
-              <div>
-                <h2 className="text-base sm:text-lg font-bold text-black dark:text-white tracking-tight">
-                  {lesson.title}
-                </h2>
-                {lesson.description && (
-                  <p className="text-xs text-neutral-600 dark:text-neutral-300 mt-1 leading-relaxed">
-                    {lesson.description}
-                  </p>
-                )}
+        {/* Integrated Lecture Bookmarks / Timestamp Study Notes Panel */}
+        {showNotesPanel && isVideo && (
+          <div className="border-t border-white/10 bg-slate-900/95 p-4 space-y-3 animate-fade-in max-h-56 overflow-y-auto">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2 text-xs font-bold text-white">
+                <Bookmark className="w-4 h-4 text-sky-400" />
+                <span>Lecture Timestamps & Study Notes</span>
+                <span className="text-[10px] text-slate-400 font-normal">({bookmarks.length} saved)</span>
               </div>
-
-              {canDelete && (
-                <div className="shrink-0 self-start">
-                  {!confirmDelete && (
-                    <button
-                      onClick={() => setConfirmDelete(true)}
-                      className="px-3 py-1.5 rounded-xl btn-secondary-glass text-xs font-semibold hover:border-black/20 dark:hover:border-white/20 transition-colors flex items-center gap-1.5 cursor-pointer"
-                    >
-                      <Trash2 className="w-3.5 h-3.5" />
-                      <span>Delete</span>
-                    </button>
-                  )}
-                </div>
-              )}
+              <button
+                onClick={() => setShowNotesPanel(false)}
+                className="text-[11px] text-slate-400 hover:text-white"
+              >
+                Hide
+              </button>
             </div>
 
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5 text-xs">
-              <div className="p-3 bg-black/5 dark:bg-white/5 rounded-xl border border-black/5 dark:border-white/10 flex items-center gap-2.5">
-                <User className="w-3.5 h-3.5 text-neutral-500 shrink-0" />
-                <div className="min-w-0">
-                  <div className="text-[10px] text-neutral-400 uppercase font-bold">
-                    {isHomework ? 'Student' : 'Teacher / Publisher'}
-                  </div>
-                  <div className="font-bold text-black dark:text-white truncate">
-                    {creatorName}
-                  </div>
-                </div>
-              </div>
-
-              <div className="p-3 bg-black/5 dark:bg-white/5 rounded-xl border border-black/5 dark:border-white/10 flex items-center gap-2.5">
-                <Calendar className="w-3.5 h-3.5 text-neutral-500 shrink-0" />
-                <div>
-                  <div className="text-[10px] text-neutral-400 uppercase font-bold">Date</div>
-                  <div className="font-bold text-black dark:text-white">
-                    {new Date(lesson.createdAt).toLocaleDateString()}
-                  </div>
-                </div>
-              </div>
-
-              <div className="p-3 bg-black/5 dark:bg-white/5 rounded-xl border border-black/5 dark:border-white/10 flex items-center gap-2.5">
-                <HardDrive className="w-3.5 h-3.5 text-neutral-500 shrink-0" />
-                <div>
-                  <div className="text-[10px] text-neutral-400 uppercase font-bold">Size</div>
-                  <div className="font-bold text-black dark:text-white font-mono">
-                    {lesson.size > 1024 * 1024 * 1024
-                      ? `${(lesson.size / (1024 * 1024 * 1024)).toFixed(2)} GB`
-                      : `${(lesson.size / (1024 * 1024)).toFixed(1)} MB`}
-                  </div>
-                </div>
-              </div>
+            {/* Quick Add Bookmark Input */}
+            <div className="flex items-center gap-2">
+              <span className="font-mono text-xs font-bold text-sky-400 bg-sky-500/15 border border-sky-400/30 px-2 py-1 rounded-lg">
+                {formatTime(currentTime)}
+              </span>
+              <input
+                type="text"
+                placeholder="Add study note or formula label at current time..."
+                value={newNoteText}
+                onChange={(e) => setNewNoteText(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') addBookmark();
+                }}
+                className="flex-1 bg-black/50 border border-white/15 rounded-xl px-3 py-1.5 text-xs text-white placeholder:text-slate-500 focus:outline-none focus:border-sky-400"
+              />
+              <button
+                onClick={addBookmark}
+                className="px-3 py-1.5 bg-sky-500 hover:bg-sky-600 text-white rounded-xl text-xs font-bold flex items-center gap-1 shadow-md cursor-pointer"
+              >
+                <Plus className="w-3.5 h-3.5" />
+                <span>Bookmark</span>
+              </button>
             </div>
 
-            {/* AI Extracted Notes and Study Solutions (Only if API key is configured) */}
-            {hasApiKey && Boolean((lesson as HomeworkRecord)?.aiExtractedText) && (
-              <div className="p-4 rounded-xl bg-black/5 dark:bg-white/5 border border-black/10 dark:border-white/10 space-y-2">
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-1.5 text-xs font-bold text-black dark:text-white">
-                    <Sparkles className="w-3.5 h-3.5" />
-                    <span>Gemini AI Extracted Study Notes &amp; Solutions</span>
-                  </div>
-                  <button
-                    onClick={() => {
-                      navigator.clipboard.writeText((lesson as HomeworkRecord).aiExtractedText || '');
-                      setCopiedAi(true);
-                      setTimeout(() => setCopiedAi(false), 2000);
-                    }}
-                    className="px-2.5 py-1 rounded-lg btn-secondary-glass text-[10px] font-semibold flex items-center gap-1 cursor-pointer transition-colors"
+            {/* Bookmarks List */}
+            {bookmarks.length === 0 ? (
+              <div className="text-[11px] text-slate-400 py-1 italic">
+                No timestamps bookmarked yet. Add a note to jump quickly to key lecture moments!
+              </div>
+            ) : (
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 pt-1">
+                {bookmarks.map((bm) => (
+                  <div
+                    key={bm.id}
+                    onClick={() => jumpToTime(bm.time)}
+                    className="flex items-center justify-between p-2 rounded-xl bg-black/40 hover:bg-sky-500/15 border border-white/10 hover:border-sky-400/30 transition-all cursor-pointer group"
                   >
-                    {copiedAi ? <Check className="w-3 h-3 text-emerald-500" /> : <Copy className="w-3 h-3 text-neutral-400" />}
-                    <span>{copiedAi ? 'Copied' : 'Copy Notes'}</span>
-                  </button>
-                </div>
-                <div className="text-xs text-neutral-800 dark:text-neutral-200 whitespace-pre-wrap max-h-56 overflow-y-auto leading-relaxed bg-black/5 dark:bg-white/5 p-3 rounded-lg border border-black/5 dark:border-white/5 font-sans">
-                  {(lesson as HomeworkRecord).aiExtractedText}
-                </div>
+                    <div className="flex items-center gap-2 min-w-0">
+                      <span className="font-mono text-[10px] font-bold text-sky-400 bg-sky-500/20 px-1.5 py-0.5 rounded">
+                        {formatTime(bm.time)}
+                      </span>
+                      <span className="text-xs text-slate-200 truncate group-hover:text-white">{bm.label}</span>
+                    </div>
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        removeBookmark(bm.id);
+                      }}
+                      className="text-slate-500 hover:text-rose-400 p-1 opacity-0 group-hover:opacity-100 transition-opacity"
+                      title="Remove bookmark"
+                    >
+                      <X className="w-3 h-3" />
+                    </button>
+                  </div>
+                ))}
               </div>
             )}
+          </div>
+        )}
+
+        {/* Keyboard Shortcuts Sheet Modal Overlay */}
+        {showShortcutsModal && (
+          <div className="absolute inset-0 z-50 bg-black/85 backdrop-blur-md flex items-center justify-center p-4">
+            <div className="bg-slate-900 border border-white/15 rounded-2xl p-5 max-w-md w-full space-y-4 shadow-2xl">
+              <div className="flex items-center justify-between border-b border-white/10 pb-2.5">
+                <div className="flex items-center gap-2 text-sm font-bold text-white">
+                  <HelpCircle className="w-4 h-4 text-sky-400" />
+                  <span>Keyboard Shortcuts</span>
+                </div>
+                <button
+                  onClick={() => setShowShortcutsModal(false)}
+                  className="p-1 text-slate-400 hover:text-white"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+
+              <div className="grid grid-cols-2 gap-2.5 text-xs text-slate-300 font-medium">
+                <div className="flex items-center justify-between bg-black/40 p-2 rounded-lg">
+                  <span>Play / Pause</span>
+                  <kbd className="px-1.5 py-0.5 bg-white/10 rounded font-mono text-[10px] text-white">Space / K</kbd>
+                </div>
+                <div className="flex items-center justify-between bg-black/40 p-2 rounded-lg">
+                  <span>Fullscreen</span>
+                  <kbd className="px-1.5 py-0.5 bg-white/10 rounded font-mono text-[10px] text-white">F</kbd>
+                </div>
+                <div className="flex items-center justify-between bg-black/40 p-2 rounded-lg">
+                  <span>Theater Mode</span>
+                  <kbd className="px-1.5 py-0.5 bg-white/10 rounded font-mono text-[10px] text-white">T</kbd>
+                </div>
+                <div className="flex items-center justify-between bg-black/40 p-2 rounded-lg">
+                  <span>Mute / Unmute</span>
+                  <kbd className="px-1.5 py-0.5 bg-white/10 rounded font-mono text-[10px] text-white">M</kbd>
+                </div>
+                <div className="flex items-center justify-between bg-black/40 p-2 rounded-lg">
+                  <span>Rewind 10s</span>
+                  <kbd className="px-1.5 py-0.5 bg-white/10 rounded font-mono text-[10px] text-white">J / ←</kbd>
+                </div>
+                <div className="flex items-center justify-between bg-black/40 p-2 rounded-lg">
+                  <span>Forward 10s</span>
+                  <kbd className="px-1.5 py-0.5 bg-white/10 rounded font-mono text-[10px] text-white">L / →</kbd>
+                </div>
+                <div className="flex items-center justify-between bg-black/40 p-2 rounded-lg">
+                  <span>Volume Up/Down</span>
+                  <kbd className="px-1.5 py-0.5 bg-white/10 rounded font-mono text-[10px] text-white">↑ / ↓</kbd>
+                </div>
+                <div className="flex items-center justify-between bg-black/40 p-2 rounded-lg">
+                  <span>Toggle Loop</span>
+                  <kbd className="px-1.5 py-0.5 bg-white/10 rounded font-mono text-[10px] text-white">R</kbd>
+                </div>
+                <div className="flex items-center justify-between bg-black/40 p-2 rounded-lg">
+                  <span>Jump to 0%-90%</span>
+                  <kbd className="px-1.5 py-0.5 bg-white/10 rounded font-mono text-[10px] text-white">0 - 9</kbd>
+                </div>
+                <div className="flex items-center justify-between bg-black/40 p-2 rounded-lg">
+                  <span>Picture in Picture</span>
+                  <kbd className="px-1.5 py-0.5 bg-white/10 rounded font-mono text-[10px] text-white">P</kbd>
+                </div>
+              </div>
+
+              <div className="text-[10px] text-center text-slate-400 pt-1">
+                Tip: Double-click left or right side of the video to skip 10 seconds.
+              </div>
+            </div>
           </div>
         )}
       </div>

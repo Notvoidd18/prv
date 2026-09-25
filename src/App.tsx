@@ -10,7 +10,6 @@ import { AdminSettings } from './components/AdminSettings.tsx';
 import { TeacherStudio } from './components/TeacherStudio.tsx';
 import { StudentLibrary } from './components/StudentLibrary.tsx';
 import { StudentHub } from './components/StudentHub.tsx';
-import { LiveClassesUpcoming } from './components/LiveClassesUpcoming.tsx';
 import { VideoPlayerModal, PreviewItem } from './components/VideoPlayerModal.tsx';
 import { UserSettingsModal } from './components/UserSettingsModal.tsx';
 import { OAuthConfig, LessonRecord, HomeworkRecord, AppUser } from './types.ts';
@@ -18,7 +17,7 @@ import { initAuthListener, syncUserWithBackend, signInWithGoogle } from './lib/f
 import { ShieldCheck, Heart, Sparkles } from 'lucide-react';
 
 export default function App() {
-  const [currentTab, setCurrentTab] = useState<'student' | 'homework' | 'live' | 'teacher' | 'admin'>('student');
+  const [currentTab, setCurrentTab] = useState<'student' | 'homework' | 'teacher' | 'admin'>('student');
   const [currentUser, setCurrentUser] = useState<AppUser | null>(null);
   const [authLoading, setAuthLoading] = useState(true);
 
@@ -162,7 +161,7 @@ export default function App() {
   };
 
   // Safe navigation gate: if not admin, don't allow tab switch to admin
-  const handleTabChange = (tab: 'student' | 'homework' | 'live' | 'teacher' | 'admin') => {
+  const handleTabChange = (tab: 'student' | 'homework' | 'teacher' | 'admin') => {
     if (tab === 'admin' && currentUser?.role !== 'admin') {
       showToast('Administrator clearance required to access this area.', 'error');
       return;
@@ -252,9 +251,6 @@ export default function App() {
           />
         )}
 
-        {/* Live Classes (Publicly accessible) */}
-        {currentTab === 'live' && <LiveClassesUpcoming />}
-
         {/* Teacher Studio & Admin Settings (Require Sign In) */}
         {(currentTab === 'teacher' || currentTab === 'admin') && !currentUser ? (
           <AuthGateway onSignInSuccess={(user) => setCurrentUser(user)} />
@@ -314,6 +310,8 @@ export default function App() {
           currentUser={currentUser}
           onClose={() => setSelectedItem(null)}
           onDeleteLesson={handleDeleteLesson}
+          lessons={lessons}
+          onSelectLesson={(l) => setSelectedItem(l)}
         />
       )}
 

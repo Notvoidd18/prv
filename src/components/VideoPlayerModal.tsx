@@ -39,6 +39,11 @@ import {
   Clock,
   FastForward,
   Rewind,
+  Sun,
+  Share2,
+  Send,
+  MessageSquare,
+  Info,
 } from 'lucide-react';
 import { LessonRecord, HomeworkRecord, AppUser } from '../types.ts';
 
@@ -86,6 +91,7 @@ export const VideoPlayerModal: React.FC<VideoPlayerModalProps> = ({
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
   const [volume, setVolume] = useState(1);
+  const [brightness, setBrightness] = useState(1);
   const [isMuted, setIsMuted] = useState(false);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [isTheaterMode, setIsTheaterMode] = useState(false);
@@ -94,6 +100,8 @@ export const VideoPlayerModal: React.FC<VideoPlayerModalProps> = ({
   const [showSpeedMenu, setShowSpeedMenu] = useState(false);
   const [showShortcutsModal, setShowShortcutsModal] = useState(false);
   const [showNotesPanel, setShowNotesPanel] = useState(false);
+  const [showAiDoubtModal, setShowAiDoubtModal] = useState(false);
+  const [showInfoDrawer, setShowInfoDrawer] = useState(false);
   const [selectedQuality, setSelectedQuality] = useState<QualityOption>('Auto');
   const [selectedSpeed, setSelectedSpeed] = useState<PlaybackSpeed>(1);
   const [controlsVisible, setControlsVisible] = useState(true);
@@ -101,6 +109,14 @@ export const VideoPlayerModal: React.FC<VideoPlayerModalProps> = ({
   const [loadError, setLoadError] = useState<string | null>(null);
   const [qualitySwitchNotice, setQualitySwitchNotice] = useState<string | null>(null);
   const [volumeHudNotice, setVolumeHudNotice] = useState<string | null>(null);
+  const [copiedLink, setCopiedLink] = useState(false);
+  const [copiedAiNotes, setCopiedAiNotes] = useState(false);
+
+  // AI Doubt Solver State
+  const [aiQuestion, setAiQuestion] = useState('');
+  const [aiAnswer, setAiAnswer] = useState<string | null>(null);
+  const [aiLoading, setAiLoading] = useState(false);
+  const [aiError, setAiError] = useState<string | null>(null);
 
   // Double click ripple animation feedback
   const [seekRipple, setSeekRipple] = useState<{ direction: 'forward' | 'backward'; count: number } | null>(null);
@@ -108,6 +124,10 @@ export const VideoPlayerModal: React.FC<VideoPlayerModalProps> = ({
   // Timeline hover scrub tooltip
   const [hoverTime, setHoverTime] = useState<number | null>(null);
   const [hoverPositionX, setHoverPositionX] = useState<number>(0);
+
+  // Touch Swipe Gesture State
+  const touchStartPos = useRef<{ x: number; y: number; time: number } | null>(null);
+  const isSwiping = useRef(false);
 
   // Bookmarks / Lecture Timestamps
   const bookmarkStorageKey = `10prv_bookmarks_${lesson.id}`;
@@ -133,11 +153,8 @@ export const VideoPlayerModal: React.FC<VideoPlayerModalProps> = ({
   // Periodic watermark position shift
   const [watermarkPos, setWatermarkPos] = useState({ top: '18%', left: '15%' });
 
-  // Multi-photo and AI study notes state
+  // Multi-photo state
   const [currentPhotoIndex, setCurrentPhotoIndex] = useState(0);
-  const [touchStartX, setTouchStartX] = useState<number | null>(null);
-  const [touchEndX, setTouchEndX] = useState<number | null>(null);
-  const [copiedAi, setCopiedAi] = useState(false);
 
   // Delete state
   const [confirmDelete, setConfirmDelete] = useState(false);
@@ -158,6 +175,8 @@ export const VideoPlayerModal: React.FC<VideoPlayerModalProps> = ({
   const currentIndex = lessons.findIndex((l) => l.id === lesson.id);
   const prevLesson = currentIndex > 0 ? lessons[currentIndex - 1] : null;
   const nextLesson = currentIndex >= 0 && currentIndex < lessons.length - 1 ? lessons[currentIndex + 1] : null;
+
+  const isTeacherOrAdmin = currentUser?.role === 'teacher' || currentUser?.role === 'admin';
 
   // Save bookmarks
   const saveBookmarks = (list: TimestampBookmark[]) => {
@@ -204,6 +223,117 @@ export const VideoPlayerModal: React.FC<VideoPlayerModalProps> = ({
     hudTimeoutRef.current = setTimeout(() => {
       setVolumeHudNotice(null);
     }, 1500);
+  };
+
+  // Copy Timestamped Link
+  const handleCopyLink = () => {
+    const timeSec = Math.floor(currentTime);
+    const url = `${window.location.origin}/?lesson=${lesson.id}&t=${timeSec}`;
+    navigator.clipboard.writeText(url).then(() => {
+      setCopiedLink(true);
+      showHud(`Link copied at ${formatTime(timeSec)}`);
+      setTimeout(() => setCopiedLink(false), 2500);
+    });
+  };
+
+  // Ask AI Doubt Solver
+  const handleAskAi = async () => {
+    if (!aiQuestion.trim()) return;
+    setAiLoading(true);
+    setAiError(null);
+    try {
+      const res = await fetch('/api/ai/ask-lesson', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          lessonId: lesson.id,
+          prompt: aiQuestion.trim(),
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.message || data.error || 'Failed to get answer from AI tutor.');
+      }
+      setAiAnswer(data.answer);
+    } catch (err: any) {
+      setAiError(err.message || 'AI request failed.');
+    } finally {
+      setAiLoading(false);
+    }
+  };
+
+  // Touch Gesture Handlers (Swipe Left/Right for Seek/Pages, Swipe Up/Down for Volume/Brightness)
+  const handleTouchStart = (e: React.TouchEvent<HTMLDivElement>) => {
+    if (e.touches.length === 1) {
+      const touch = e.touches[0];
+      touchStartPos.current = {
+        x: touch.clientX,
+        y: touch.clientY,
+        time: Date.now(),
+      };
+      isSwiping.current = true;
+    }
+  };
+
+  const handleTouchMove = (e: React.TouchEvent<HTMLDivElement>) => {
+    if (!touchStartPos.current || !isSwiping.current || e.touches.length !== 1) return;
+    const touch = e.touches[0];
+    const deltaX = touch.clientX - touchStartPos.current.x;
+    const deltaY = touch.clientY - touchStartPos.current.y;
+
+    // Check if vertical swipe on left vs right side
+    if (Math.abs(deltaY) > 30 && Math.abs(deltaY) > Math.abs(deltaX)) {
+      const rect = e.currentTarget.getBoundingClientRect();
+      const isRightSide = touchStartPos.current.x > rect.left + rect.width / 2;
+
+      if (isRightSide) {
+        // Adjust Volume
+        const step = deltaY < 0 ? 0.02 : -0.02;
+        adjustVolume(step);
+      } else {
+        // Adjust Brightness
+        const step = deltaY < 0 ? 0.02 : -0.02;
+        setBrightness((prev) => {
+          const next = Math.max(0.5, Math.min(1.5, prev + step));
+          showHud(`Brightness: ${Math.round(next * 100)}%`);
+          return next;
+        });
+      }
+      touchStartPos.current.y = touch.clientY;
+    }
+  };
+
+  const handleTouchEnd = (e: React.TouchEvent<HTMLDivElement>) => {
+    if (!touchStartPos.current) return;
+    const touch = e.changedTouches[0];
+    const deltaX = touch.clientX - touchStartPos.current.x;
+    const deltaY = touch.clientY - touchStartPos.current.y;
+    const durationMs = Date.now() - touchStartPos.current.time;
+
+    // Horizontal Swipe detection
+    if (Math.abs(deltaX) > 45 && Math.abs(deltaX) > Math.abs(deltaY) && durationMs < 500) {
+      if (isVideo) {
+        if (deltaX > 0) {
+          seekDelta(10);
+        } else {
+          seekDelta(-10);
+        }
+      } else if (isPhoto) {
+        const totalPhotos = (lesson as any).fileNames?.length || 1;
+        if (deltaX < 0 && currentPhotoIndex < totalPhotos - 1) {
+          setCurrentPhotoIndex((prev) => prev + 1);
+          showHud(`Page ${currentPhotoIndex + 2} of ${totalPhotos}`);
+        } else if (deltaX > 0 && currentPhotoIndex > 0) {
+          setCurrentPhotoIndex((prev) => prev - 1);
+          showHud(`Page ${currentPhotoIndex} of ${totalPhotos}`);
+        }
+      }
+    }
+
+    touchStartPos.current = null;
+    isSwiping.current = false;
   };
 
   // Initialize HLS / Native Progressive Stream
@@ -322,7 +452,6 @@ export const VideoPlayerModal: React.FC<VideoPlayerModalProps> = ({
   // Comprehensive Keyboard Shortcuts Listener
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      // Ignore if user is currently typing in an input/textarea
       const tag = (e.target as HTMLElement)?.tagName?.toLowerCase();
       if (tag === 'input' || tag === 'textarea') return;
 
@@ -389,6 +518,8 @@ export const VideoPlayerModal: React.FC<VideoPlayerModalProps> = ({
         case 'escape':
           if (showShortcutsModal) {
             setShowShortcutsModal(false);
+          } else if (showAiDoubtModal) {
+            setShowAiDoubtModal(false);
           } else if (isFullscreen) {
             toggleFullscreen();
           } else {
@@ -421,7 +552,7 @@ export const VideoPlayerModal: React.FC<VideoPlayerModalProps> = ({
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [isVideo, isPlaying, isFullscreen, isTheaterMode, duration, showShortcutsModal]);
+  }, [isVideo, isPlaying, isFullscreen, isTheaterMode, duration, showShortcutsModal, showAiDoubtModal]);
 
   const togglePlay = () => {
     if (!videoRef.current) return;
@@ -714,6 +845,20 @@ export const VideoPlayerModal: React.FC<VideoPlayerModalProps> = ({
               </button>
             )}
 
+            {/* AI Doubt Solver Button */}
+            <button
+              onClick={() => setShowAiDoubtModal((p) => !p)}
+              className={`p-1.5 sm:px-2.5 sm:py-1 rounded-xl border transition-all cursor-pointer flex items-center gap-1 text-xs font-bold ${
+                showAiDoubtModal
+                  ? 'bg-gradient-to-r from-sky-500 to-blue-600 text-white border-sky-400 shadow-md shadow-sky-500/30'
+                  : 'bg-white/5 hover:bg-white/10 text-sky-400 hover:text-white border-sky-400/30'
+              }`}
+              title="Ask AI Doubt Solver"
+            >
+              <Sparkles className="w-3.5 h-3.5" />
+              <span className="hidden sm:inline">Ask AI</span>
+            </button>
+
             {/* Bookmarks Toggle Button */}
             {isVideo && (
               <button
@@ -728,6 +873,19 @@ export const VideoPlayerModal: React.FC<VideoPlayerModalProps> = ({
                 <Bookmark className="w-4 h-4" />
               </button>
             )}
+
+            {/* Info & Share Drawer Toggle */}
+            <button
+              onClick={() => setShowInfoDrawer((p) => !p)}
+              className={`p-2 rounded-xl border transition-colors cursor-pointer ${
+                showInfoDrawer
+                  ? 'bg-sky-500 text-white border-sky-400'
+                  : 'bg-white/5 hover:bg-white/10 text-slate-300 hover:text-white border-white/10'
+              }`}
+              title="Lesson Info & Share"
+            >
+              <Info className="w-4 h-4" />
+            </button>
 
             {/* Keyboard Shortcuts Button */}
             {isVideo && (
@@ -752,8 +910,14 @@ export const VideoPlayerModal: React.FC<VideoPlayerModalProps> = ({
           </div>
         </div>
 
-        {/* Main Content Area (Video, Photo, or PDF) */}
-        <div className="relative flex-1 bg-black flex items-center justify-center overflow-hidden min-h-[360px] sm:min-h-[480px]">
+        {/* Main Content Area (Video, Photo, or PDF) with Touch Swipe Gestures */}
+        <div
+          onTouchStart={handleTouchStart}
+          onTouchMove={handleTouchMove}
+          onTouchEnd={handleTouchEnd}
+          className="relative flex-1 bg-black flex items-center justify-center overflow-hidden min-h-[360px] sm:min-h-[480px]"
+          style={{ filter: `brightness(${brightness})` }}
+        >
           {isVideo ? (
             <>
               {/* Dynamic Double Tap / Click Gesture Area */}
@@ -799,7 +963,7 @@ export const VideoPlayerModal: React.FC<VideoPlayerModalProps> = ({
                 10Prv · {currentUser?.email || 'Student View'}
               </div>
 
-              {/* On-Screen HUD Action Feedback (Volume, Seek, Speed) */}
+              {/* On-Screen HUD Action Feedback (Volume, Seek, Speed, Brightness) */}
               {volumeHudNotice && (
                 <div className="absolute top-8 left-1/2 -translate-x-1/2 z-30 px-3.5 py-1.5 rounded-2xl bg-black/80 backdrop-blur-md border border-white/20 text-white text-xs font-bold tracking-wide pointer-events-none shadow-xl transition-all animate-fade-in">
                   {volumeHudNotice}
@@ -1095,7 +1259,7 @@ export const VideoPlayerModal: React.FC<VideoPlayerModalProps> = ({
               </div>
             </>
           ) : isPhoto ? (
-            /* Photo Viewer with Multi-page Pagination */
+            /* Photo Viewer with Multi-page Pagination and Swipe */
             <div className="relative w-full h-full flex flex-col items-center justify-center p-4">
               {(() => {
                 const totalPhotos = (lesson as any).fileNames?.length || 1;
@@ -1110,7 +1274,7 @@ export const VideoPlayerModal: React.FC<VideoPlayerModalProps> = ({
                     <img
                       src={photoSrc}
                       alt={`${lesson.title} page ${currentPhotoIndex + 1}`}
-                      className="max-h-[72vh] max-w-full object-contain rounded-xl shadow-2xl"
+                      className="max-h-[72vh] max-w-full object-contain rounded-xl shadow-2xl transition-all duration-200"
                     />
 
                     {/* Pagination Controls for Multi-Photo Submissions */}
@@ -1121,7 +1285,7 @@ export const VideoPlayerModal: React.FC<VideoPlayerModalProps> = ({
                           onClick={() => setCurrentPhotoIndex((prev) => Math.max(0, prev - 1))}
                           disabled={currentPhotoIndex === 0}
                           className="absolute left-3 top-1/2 -translate-y-1/2 p-2.5 rounded-2xl bg-black/70 hover:bg-black/90 text-white disabled:opacity-30 backdrop-blur-md border border-white/20 transition-all cursor-pointer"
-                          title="Previous Page"
+                          title="Previous Page (Swipe Right)"
                         >
                           <ChevronLeft className="w-5 h-5" />
                         </button>
@@ -1132,11 +1296,11 @@ export const VideoPlayerModal: React.FC<VideoPlayerModalProps> = ({
                           }
                           disabled={currentPhotoIndex === totalPhotos - 1}
                           className="absolute right-3 top-1/2 -translate-y-1/2 p-2.5 rounded-2xl bg-black/70 hover:bg-black/90 text-white disabled:opacity-30 backdrop-blur-md border border-white/20 transition-all cursor-pointer"
-                          title="Next Page"
+                          title="Next Page (Swipe Left)"
                         >
                           <ChevronRight className="w-5 h-5" />
                         </button>
-                        <div className="absolute bottom-3 left-1/2 -translate-x-1/2 px-3 py-1 rounded-full bg-black/80 backdrop-blur-md text-white font-mono text-xs font-bold border border-white/20">
+                        <div className="absolute bottom-3 left-1/2 -translate-x-1/2 px-3 py-1 rounded-full bg-black/80 backdrop-blur-md text-white font-mono text-xs font-bold border border-white/20 shadow-lg">
                           Page {currentPhotoIndex + 1} of {totalPhotos}
                         </div>
                       </>
@@ -1183,6 +1347,125 @@ export const VideoPlayerModal: React.FC<VideoPlayerModalProps> = ({
             </div>
           )}
         </div>
+
+        {/* Lesson Info, Share & Actions Bottom Bar Drawer */}
+        {showInfoDrawer && (
+          <div className="border-t border-white/10 bg-slate-900/95 p-4 space-y-3 animate-fade-in max-h-60 overflow-y-auto">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2 text-xs font-bold text-white">
+                <Info className="w-4 h-4 text-sky-400" />
+                <span>Lesson Material Overview</span>
+              </div>
+              <button onClick={() => setShowInfoDrawer(false)} className="text-[11px] text-slate-400 hover:text-white">
+                Close
+              </button>
+            </div>
+
+            <p className="text-xs text-slate-300">{lesson.description || 'No specific description provided.'}</p>
+
+            <div className="flex flex-wrap items-center gap-2 pt-1 text-xs">
+              {/* Copy Timestamped Link */}
+              <button
+                onClick={handleCopyLink}
+                className="px-3 py-1.5 rounded-xl bg-white/10 hover:bg-white/20 text-white font-bold flex items-center gap-1.5 transition-colors cursor-pointer border border-white/10"
+              >
+                <Share2 className="w-3.5 h-3.5 text-sky-400" />
+                <span>{copiedLink ? 'Copied Timestamped Link!' : 'Share with Current Time'}</span>
+              </button>
+
+              {/* Direct Download */}
+              <a
+                href={
+                  isHomework
+                    ? `/api/homework/${lesson.id}/file/0?auth=${encodeURIComponent(currentUser?.email || '')}`
+                    : `/api/videos/${lesson.id}/stream?auth=${encodeURIComponent(currentUser?.email || '')}`
+                }
+                download={lesson.fileName}
+                className="px-3 py-1.5 rounded-xl bg-white/10 hover:bg-white/20 text-white font-bold flex items-center gap-1.5 transition-colors border border-white/10"
+              >
+                <Download className="w-3.5 h-3.5 text-emerald-400" />
+                <span>Download File</span>
+              </a>
+
+              {/* Delete Button for Teachers / Admins */}
+              {isTeacherOrAdmin && onDeleteLesson && (
+                <button
+                  onClick={() => setConfirmDelete(true)}
+                  className="px-3 py-1.5 rounded-xl bg-rose-500/20 hover:bg-rose-500/30 text-rose-300 font-bold flex items-center gap-1.5 transition-colors border border-rose-500/30 cursor-pointer ml-auto"
+                >
+                  <Trash2 className="w-3.5 h-3.5" />
+                  <span>Delete Lesson</span>
+                </button>
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* AI Doubt Solver & Lecture Assistant Sheet */}
+        {showAiDoubtModal && (
+          <div className="border-t border-white/10 bg-slate-900/98 p-4 space-y-3 animate-fade-in max-h-72 overflow-y-auto">
+            <div className="flex items-center justify-between border-b border-white/10 pb-2">
+              <div className="flex items-center gap-2 text-xs font-bold text-sky-400">
+                <Sparkles className="w-4 h-4" />
+                <span>Gemini AI Tutor · Instant Doubt Solver</span>
+              </div>
+              <button
+                onClick={() => setShowAiDoubtModal(false)}
+                className="text-[11px] text-slate-400 hover:text-white"
+              >
+                Close
+              </button>
+            </div>
+
+            <div className="flex items-center gap-2">
+              <input
+                type="text"
+                placeholder="Ask any question about this lecture, formula, or concept..."
+                value={aiQuestion}
+                onChange={(e) => setAiQuestion(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') handleAskAi();
+                }}
+                className="flex-1 bg-black/60 border border-white/15 rounded-xl px-3 py-2 text-xs text-white placeholder:text-slate-500 focus:outline-none focus:border-sky-400"
+              />
+              <button
+                onClick={handleAskAi}
+                disabled={aiLoading || !aiQuestion.trim()}
+                className="px-4 py-2 bg-gradient-to-r from-sky-500 to-blue-600 hover:from-sky-600 hover:to-blue-700 text-white rounded-xl text-xs font-bold flex items-center gap-1.5 shadow-md cursor-pointer disabled:opacity-50"
+              >
+                {aiLoading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Send className="w-3.5 h-3.5" />}
+                <span>Solve</span>
+              </button>
+            </div>
+
+            {aiError && (
+              <div className="text-xs text-rose-400 bg-rose-500/15 border border-rose-500/30 p-2.5 rounded-xl flex items-center gap-2">
+                <AlertCircle className="w-4 h-4 shrink-0" />
+                <span>{aiError}</span>
+              </div>
+            )}
+
+            {aiAnswer && (
+              <div className="p-3 bg-black/50 border border-sky-400/30 rounded-xl space-y-2 text-xs text-slate-200">
+                <div className="flex items-center justify-between border-b border-white/10 pb-1">
+                  <span className="font-bold text-sky-400">AI Tutor Explanation</span>
+                  <button
+                    onClick={() => {
+                      navigator.clipboard.writeText(aiAnswer);
+                      setCopiedAiNotes(true);
+                      setTimeout(() => setCopiedAiNotes(false), 2000);
+                    }}
+                    className="text-[10px] text-slate-400 hover:text-white flex items-center gap-1 cursor-pointer"
+                  >
+                    <Copy className="w-3 h-3" />
+                    <span>{copiedAiNotes ? 'Copied!' : 'Copy Explanation'}</span>
+                  </button>
+                </div>
+                <div className="whitespace-pre-wrap leading-relaxed text-slate-300 font-sans">{aiAnswer}</div>
+              </div>
+            )}
+          </div>
+        )}
 
         {/* Integrated Lecture Bookmarks / Timestamp Study Notes Panel */}
         {showNotesPanel && isVideo && (
@@ -1261,6 +1544,39 @@ export const VideoPlayerModal: React.FC<VideoPlayerModalProps> = ({
           </div>
         )}
 
+        {/* Delete Confirmation Dialog */}
+        {confirmDelete && (
+          <div className="absolute inset-0 z-50 bg-black/85 backdrop-blur-md flex items-center justify-center p-4">
+            <div className="bg-slate-900 border border-rose-500/40 rounded-2xl p-6 max-w-sm w-full space-y-4 shadow-2xl">
+              <div className="flex items-center gap-3 text-rose-400">
+                <AlertCircle className="w-6 h-6" />
+                <h4 className="font-bold text-base text-white">Delete Lesson?</h4>
+              </div>
+              <p className="text-xs text-slate-300">
+                Are you sure you want to permanently delete <strong className="text-white">{lesson.title}</strong>? This
+                removes the file and HLS stream caches from the server.
+              </p>
+              {deleteError && <div className="text-xs text-rose-400 bg-rose-500/10 p-2 rounded-lg">{deleteError}</div>}
+              <div className="flex items-center justify-end gap-2 pt-2">
+                <button
+                  onClick={() => setConfirmDelete(false)}
+                  className="px-3 py-1.5 rounded-xl bg-white/10 hover:bg-white/20 text-white text-xs font-semibold"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={handleDelete}
+                  disabled={isDeleting}
+                  className="px-4 py-1.5 rounded-xl bg-rose-500 hover:bg-rose-600 text-white text-xs font-bold flex items-center gap-1.5 shadow-md disabled:opacity-50"
+                >
+                  {isDeleting && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
+                  <span>Delete Permanently</span>
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
         {/* Keyboard Shortcuts Sheet Modal Overlay */}
         {showShortcutsModal && (
           <div className="absolute inset-0 z-50 bg-black/85 backdrop-blur-md flex items-center justify-center p-4">
@@ -1270,10 +1586,7 @@ export const VideoPlayerModal: React.FC<VideoPlayerModalProps> = ({
                   <HelpCircle className="w-4 h-4 text-sky-400" />
                   <span>Keyboard Shortcuts</span>
                 </div>
-                <button
-                  onClick={() => setShowShortcutsModal(false)}
-                  className="p-1 text-slate-400 hover:text-white"
-                >
+                <button onClick={() => setShowShortcutsModal(false)} className="p-1 text-slate-400 hover:text-white">
                   <X className="w-4 h-4" />
                 </button>
               </div>
@@ -1322,7 +1635,7 @@ export const VideoPlayerModal: React.FC<VideoPlayerModalProps> = ({
               </div>
 
               <div className="text-[10px] text-center text-slate-400 pt-1">
-                Tip: Double-click left or right side of the video to skip 10 seconds.
+                Tip: Swipe left/right on mobile to seek or flip photos. Swipe right/left edge up/down for volume & brightness.
               </div>
             </div>
           </div>

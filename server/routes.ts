@@ -878,6 +878,23 @@ router.get('/api/videos/:id/stream', async (req: Request, res: Response) => {
     }
 
     if (!lesson) {
+      // Check if this ID belongs to a homework item for seamless preview
+      const hw = db.getHomework().find((h) => h.id === id);
+      if (hw) {
+        const targetFileName = hw.fileName;
+        const filePath = path.join(HOMEWORK_DIR, targetFileName);
+        if (fs.existsSync(filePath)) {
+          let mimeType = hw.mimeType;
+          if (targetFileName.match(/\.(jpg|jpeg)$/i)) mimeType = 'image/jpeg';
+          else if (targetFileName.match(/\.png$/i)) mimeType = 'image/png';
+          else if (targetFileName.match(/\.pdf$/i)) mimeType = 'application/pdf';
+          res.setHeader('Content-Type', mimeType || 'application/octet-stream');
+          res.setHeader('Content-Disposition', 'inline');
+          res.setHeader('X-Content-Type-Options', 'nosniff');
+          fs.createReadStream(filePath).pipe(res);
+          return;
+        }
+      }
       res.status(404).json({ error: 'Lesson material not found.' });
       return;
     }
@@ -1198,6 +1215,10 @@ router.get('/api/homework/:id/stream', (req: Request, res: Response) => {
   const fileIndex = parseInt(req.query.fileIndex as string, 10);
   const hw = db.getHomework().find((h) => h.id === id);
 
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, HEAD, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Range');
+
   if (!hw) {
     res.status(404).json({ error: 'Homework not found.' });
     return;
@@ -1210,6 +1231,14 @@ router.get('/api/homework/:id/stream', (req: Request, res: Response) => {
 
   const filePath = path.join(HOMEWORK_DIR, targetFileName);
   if (!fs.existsSync(filePath)) {
+    // Check if default fileName exists
+    if (hw.fileName && fs.existsSync(path.join(HOMEWORK_DIR, hw.fileName))) {
+      const fallbackStream = fs.createReadStream(path.join(HOMEWORK_DIR, hw.fileName));
+      res.setHeader('Content-Type', hw.mimeType || 'image/jpeg');
+      res.setHeader('Content-Disposition', 'inline');
+      fallbackStream.pipe(res);
+      return;
+    }
     res.status(404).json({ error: 'Homework file missing on server.' });
     return;
   }
@@ -1222,6 +1251,55 @@ router.get('/api/homework/:id/stream', (req: Request, res: Response) => {
   res.setHeader('Content-Type', mimeType || 'application/octet-stream');
   res.setHeader('Content-Disposition', 'inline');
   res.setHeader('X-Content-Type-Options', 'nosniff');
+  const stream = fs.createReadStream(filePath);
+  stream.pipe(res);
+});
+
+/**
+ * Streams a homework file/photo by numeric index: /api/homework/:id/file/:index
+ */
+router.get('/api/homework/:id/file/:index', (req: Request, res: Response) => {
+  const { id, index } = req.params;
+  const fileIndex = parseInt(index, 10);
+  const hw = db.getHomework().find((h) => h.id === id);
+
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, HEAD, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Range');
+
+  if (!hw) {
+    res.status(404).json({ error: 'Homework not found.' });
+    return;
+  }
+
+  let targetFileName = hw.fileName;
+  if (!isNaN(fileIndex) && hw.fileNames && hw.fileNames[fileIndex]) {
+    targetFileName = hw.fileNames[fileIndex];
+  }
+
+  const filePath = path.join(HOMEWORK_DIR, targetFileName);
+  if (!fs.existsSync(filePath)) {
+    // Check fallback
+    if (hw.fileName && fs.existsSync(path.join(HOMEWORK_DIR, hw.fileName))) {
+      const fallbackStream = fs.createReadStream(path.join(HOMEWORK_DIR, hw.fileName));
+      res.setHeader('Content-Type', hw.mimeType || 'image/jpeg');
+      res.setHeader('Content-Disposition', 'inline');
+      fallbackStream.pipe(res);
+      return;
+    }
+    res.status(404).json({ error: 'Homework file missing on server.' });
+    return;
+  }
+
+  let mimeType = hw.mimeType;
+  if (targetFileName.match(/\.(jpg|jpeg)$/i)) mimeType = 'image/jpeg';
+  else if (targetFileName.match(/\.png$/i)) mimeType = 'image/png';
+  else if (targetFileName.match(/\.pdf$/i)) mimeType = 'application/pdf';
+
+  res.setHeader('Content-Type', mimeType || 'image/jpeg');
+  res.setHeader('Content-Disposition', 'inline');
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('Cache-Control', 'public, max-age=86400');
   const stream = fs.createReadStream(filePath);
   stream.pipe(res);
 });

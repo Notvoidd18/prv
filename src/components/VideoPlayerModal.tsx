@@ -1095,19 +1095,65 @@ export const VideoPlayerModal: React.FC<VideoPlayerModalProps> = ({
               </div>
             </>
           ) : isPhoto ? (
-            /* Photo Viewer */
-            <div className="relative w-full h-full flex items-center justify-center p-4">
-              <img
-                src={`/api/videos/${lesson.id}/stream`}
-                alt={lesson.title}
-                className="max-h-[75vh] max-w-full object-contain rounded-xl shadow-2xl"
-              />
+            /* Photo Viewer with Multi-page Pagination */
+            <div className="relative w-full h-full flex flex-col items-center justify-center p-4">
+              {(() => {
+                const totalPhotos = (lesson as any).fileNames?.length || 1;
+                const photoSrc = isHomework
+                  ? `/api/homework/${lesson.id}/file/${currentPhotoIndex}?auth=${encodeURIComponent(
+                      currentUser?.email || ''
+                    )}`
+                  : `/api/videos/${lesson.id}/stream?auth=${encodeURIComponent(currentUser?.email || '')}`;
+
+                return (
+                  <div className="relative flex items-center justify-center w-full max-h-[75vh]">
+                    <img
+                      src={photoSrc}
+                      alt={`${lesson.title} page ${currentPhotoIndex + 1}`}
+                      className="max-h-[72vh] max-w-full object-contain rounded-xl shadow-2xl"
+                    />
+
+                    {/* Pagination Controls for Multi-Photo Submissions */}
+                    {totalPhotos > 1 && (
+                      <>
+                        <button
+                          type="button"
+                          onClick={() => setCurrentPhotoIndex((prev) => Math.max(0, prev - 1))}
+                          disabled={currentPhotoIndex === 0}
+                          className="absolute left-3 top-1/2 -translate-y-1/2 p-2.5 rounded-2xl bg-black/70 hover:bg-black/90 text-white disabled:opacity-30 backdrop-blur-md border border-white/20 transition-all cursor-pointer"
+                          title="Previous Page"
+                        >
+                          <ChevronLeft className="w-5 h-5" />
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setCurrentPhotoIndex((prev) => Math.min(totalPhotos - 1, prev + 1))
+                          }
+                          disabled={currentPhotoIndex === totalPhotos - 1}
+                          className="absolute right-3 top-1/2 -translate-y-1/2 p-2.5 rounded-2xl bg-black/70 hover:bg-black/90 text-white disabled:opacity-30 backdrop-blur-md border border-white/20 transition-all cursor-pointer"
+                          title="Next Page"
+                        >
+                          <ChevronRight className="w-5 h-5" />
+                        </button>
+                        <div className="absolute bottom-3 left-1/2 -translate-x-1/2 px-3 py-1 rounded-full bg-black/80 backdrop-blur-md text-white font-mono text-xs font-bold border border-white/20">
+                          Page {currentPhotoIndex + 1} of {totalPhotos}
+                        </div>
+                      </>
+                    )}
+                  </div>
+                );
+              })()}
             </div>
           ) : isPdf ? (
             /* PDF Document Viewer */
             <div className="w-full h-[75vh]">
               <iframe
-                src={`/api/videos/${lesson.id}/stream#toolbar=1`}
+                src={
+                  isHomework
+                    ? `/api/homework/${lesson.id}/file/0?auth=${encodeURIComponent(currentUser?.email || '')}#toolbar=1`
+                    : `/api/videos/${lesson.id}/stream?auth=${encodeURIComponent(currentUser?.email || '')}#toolbar=1`
+                }
                 title={lesson.title}
                 className="w-full h-full border-0 rounded-b-2xl bg-white"
               />
@@ -1123,7 +1169,11 @@ export const VideoPlayerModal: React.FC<VideoPlayerModalProps> = ({
                 This document is stored securely in your private cloud. You can view it directly or download it below.
               </p>
               <a
-                href={`/api/videos/${lesson.id}/stream`}
+                href={
+                  isHomework
+                    ? `/api/homework/${lesson.id}/file/0?auth=${encodeURIComponent(currentUser?.email || '')}`
+                    : `/api/videos/${lesson.id}/stream?auth=${encodeURIComponent(currentUser?.email || '')}`
+                }
                 download={lesson.fileName}
                 className="px-4 py-2 rounded-xl bg-sky-500 hover:bg-sky-600 text-white font-bold text-xs flex items-center gap-2 shadow-lg transition-all"
               >
